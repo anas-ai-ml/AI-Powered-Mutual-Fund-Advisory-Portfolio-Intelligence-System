@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def run_monte_carlo_simulation(
     initial_corpus: float,
     monthly_sip: float,
@@ -11,28 +10,34 @@ def run_monte_carlo_simulation(
     num_simulations: int = 1000,
 ) -> float:
     """
-    Run a Monte Carlo simulation to calculate the probability of achieving the target corpus.
-    Simulates `num_simulations` scenarios using a normal distribution of returns.
+    Run a Monte Carlo simulation using Geometric Brownian Motion (GBM) 
+    to calculate the probability of achieving the target corpus.
     """
     if years <= 0 or target_corpus <= 0:
         return 0.0
 
     months = years * 12
-    monthly_return_mean = expected_annual_return / 12.0
-    monthly_volatility = annual_volatility / np.sqrt(12)
+    dt = 1.0 / 12.0
 
     success_count = 0
     np.random.seed(42)  # For reproducibility in testing
 
-    random_returns = np.random.normal(
-        monthly_return_mean, monthly_volatility, (num_simulations, months)
-    )
+    # GBM Parameters drift and diffusion
+    # Drift: (mu - sigma^2 / 2) * dt
+    drift = (expected_annual_return - (annual_volatility ** 2) / 2) * dt
+    
+    # Pre-compute random diffusion matrix for all paths
+    diffusion = annual_volatility * np.sqrt(dt) * np.random.normal(size=(num_simulations, months))
+
+    # Calculate compounded return multipliers
+    return_multipliers = np.exp(drift + diffusion)
 
     for i in range(num_simulations):
         current_corpus = initial_corpus
         for month in range(months):
             current_corpus += monthly_sip
-            current_corpus *= 1 + random_returns[i, month]
+            # Apply GBM growth
+            current_corpus *= return_multipliers[i, month]
 
         if current_corpus >= target_corpus:
             success_count += 1

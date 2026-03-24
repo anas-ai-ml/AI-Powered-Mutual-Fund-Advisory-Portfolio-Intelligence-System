@@ -14,6 +14,8 @@ def generate_financial_report(
     monte_carlo_prob: float,
     sip_projections: dict = None,
     expected_returns: dict = None,
+    ai_intel: dict = None,
+    macro_context: dict = None,
     output_path: str = "report.pdf",
 ):
     """
@@ -42,6 +44,8 @@ def generate_financial_report(
         monte_carlo_prob=monte_carlo_prob,
         sip_projections=sip_projections or {},
         expected_returns=expected_returns or {},
+        ai_intel=ai_intel or {},
+        macro_context=macro_context or {},
         disclaimer=disclaimer_text,
     )
 

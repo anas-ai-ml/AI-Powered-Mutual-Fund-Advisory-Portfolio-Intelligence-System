@@ -124,7 +124,39 @@
     </div>
 
     <div class="section">
-        <h2>4. Goal Planning Breakdown</h2>
+        <h2>4. Macro Environment Analysis</h2>
+        {% if macro_context %}
+        <table class="data-table">
+            <tr>
+                <th>Macro Stability Score</th>
+                <td>{{ "{:.0%}".format(macro_context.get('macro_context_score', 1.0)) }}</td>
+            </tr>
+            <tr>
+                <th>Inflation Rate (CPI)</th>
+                <td>{{ "{:.1%}".format(macro_context.get('inflation_rate', 0.05)) }}</td>
+            </tr>
+            <tr>
+                <th>Policy Rate (Repo)</th>
+                <td>{{ "{:.2%}".format(macro_context.get('interest_rate', 0.065)) }} ({{ macro_context.get('interest_rate_trend', 'stable') }})</td>
+            </tr>
+        </table>
+        {% else %}
+        <p>Macro environment data is currently unavailable.</p>
+        {% endif %}
+    </div>
+
+    <div class="section">
+        <h2>5. Live AI Market Insights</h2>
+        {% if ai_intel and ai_intel.get('narratives') %}
+        <p><strong>Market Summary:</strong><br>{{ ai_intel.narratives.get('market_summary', 'N/A') }}</p>
+        <p><strong>Adaptive Allocation Rationale:</strong><br>{{ ai_intel.narratives.get('allocation_rationale', 'N/A') }}</p>
+        {% else %}
+        <p>Live AI market insights are currently unavailable.</p>
+        {% endif %}
+    </div>
+
+    <div class="section">
+        <h2>6. Goal Planning Breakdown</h2>
 
         <h3>Retirement Goal</h3>
         <p>Years to Goal: {{ retirement.years_to_goal }}</p>
@@ -138,7 +170,7 @@
     </div>
 
     <div class="section">
-        <h2>5. Existing Portfolio Health</h2>
+        <h2>7. Existing Portfolio Health</h2>
         <p><strong>Total Corpus:</strong> ₹{{ "{:,.2f}".format(portfolio.get('total_corpus', 0.0)) }}
             &nbsp;&nbsp;|&nbsp;&nbsp;
             <strong>Diversification Score:</strong> {{ portfolio.get('diversification_score', 0) }} / 10
@@ -169,7 +201,7 @@
     </div>
 
     <div class="section">
-        <h2>6. Target Asset Allocation</h2>
+        <h2>8. Target Asset Allocation</h2>
         <p>Based on your <strong>{{ risk.category }}</strong> risk profile, here is the recommended target allocation:
         </p>
         <table class="data-table">
@@ -187,33 +219,44 @@
     </div>
 
     <div class="section">
-        <h2>7. Mutual Fund Recommendations (India 2026 Strategy)</h2>
+        <h2>9. Mutual Fund Recommendations (India 2026 Strategy)</h2>
         <table class="data-table">
             <tr>
-                <th>Fund Name</th>
+                <th>Fund Name & AI Selection Reason</th>
                 <th>Category</th>
                 <th>Risk Level</th>
                 <th>Target Weight</th>
-                <th>1Y Return</th>
-                <th>3Y Return</th>
-                <th>5Y Return</th>
+                <th>AI Score</th>
+                <th>Confidence</th>
             </tr>
             {% for fund in funds %}
             <tr>
-                <td>{{ fund.name }}</td>
+                <td>
+                    <strong>{{ fund.name }}</strong>
+                    <div style="font-size: 12px; color: #555; margin-top: 5px;">
+                        <em>🤖 {{ fund.get('reason', fund.get('ai_reason', 'Selected based on multi-factor analysis.')) }}</em>
+                    </div>
+                </td>
                 <td>{{ fund.category }}</td>
                 <td>{{ fund.risk }}</td>
                 <td>{{ fund.allocation_weight }}%</td>
-                <td>{{ fund['1y'] }}%</td>
-                <td>{{ fund['3y'] }}%</td>
-                <td>{{ fund['5y'] }}%</td>
+                <td>{{ "{:.1f}".format(fund.get('score', fund.get('ai_score', 0.0))) }}/100</td>
+                <td>
+                    {% if fund.get('confidence') == 'High' %}
+                    <span style="color: green; font-weight: bold;">High</span>
+                    {% elif fund.get('confidence') == 'Medium' %}
+                    <span style="color: orange; font-weight: bold;">Medium</span>
+                    {% else %}
+                    <span style="color: red; font-weight: bold;">Low</span>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </table>
     </div>
 
     <div class="section">
-        <h2>8. Scenario Projections</h2>
+        <h2>10. Scenario Projections</h2>
 
         <h3>SIP Projection Timeline</h3>
         <p>Future value of current portfolio + monthly savings assuming a base 12% annualized return.</p>
@@ -248,7 +291,7 @@
     </div>
 
     <div class="section">
-        <h2>9. Monte Carlo Simulation</h2>
+        <h2>11. Monte Carlo Simulation</h2>
         <p>Simulating 1,000 potential market scenarios assuming normal distribution around expected returns, the
             probability of achieving your primary retirement corpus based on your current savings capacity is <strong>{{
                 monte_carlo_prob }}%</strong>.</p>

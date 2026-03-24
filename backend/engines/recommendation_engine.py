@@ -17,115 +17,43 @@ def get_processed_fund_universe() -> tuple[pd.DataFrame, bool]:
     return df, is_live
 
 
+from backend.engines.recommendation_engine.dynamic_recommender import run_dynamic_pipeline
+from ai_agents.db import storage
+import logging
+
+logger = logging.getLogger(__name__)
+
 def suggest_mutual_funds(
     allocation: Dict[str, Any], risk_profile: str
 ) -> tuple[List[Dict[str, Any]], bool]:
     """
-    Suggests specific mutual funds dynamically using AMFI live NAVs
-    and ETF proxy performance.
-
-    Key design: The fund picked per category VARIES based on:
-      1. The risk_profile string (Conservative / Moderate / Aggressive)
-      2. The asset_class key from the allocation dict
-      3. The allocation weight percentage
-
-    This ensures different user inputs produce genuinely different
-    fund recommendations — not just different weights on the same funds.
+    Suggests specific mutual funds dynamically using the new Multi-Factor
+    Automatic Recommendation Engine.
     """
-    df, is_live = get_processed_fund_universe()
-    recommendations = []
-
-    if df is None or df.empty:
-        return recommendations, False
-
-    investor_type = risk_profile.lower()
-
-    # Determine the score column name (handles legacy cache)
-    score_col = None
-    if "ranking_score" in df.columns:
-        score_col = "ranking_score"
-    elif "score" in df.columns:
-        score_col = "score"
-
-    for asset_class, weight in allocation.items():
-        if weight <= 0:
-            continue
-
-        # Map allocation key -> fund category
-        target_cats = set()
-        if "Equity" in asset_class:
-            if "Large Cap" in asset_class:
-                target_cats = {"Large Cap"}
-            elif "Flexi" in asset_class:
-                target_cats = {"Flexi"}
-            elif "Small" in asset_class:
-                target_cats = {"Small Cap"}
-            elif "Mid" in asset_class:
-                target_cats = {"Mid Cap"}
-            elif "Hybrid" in asset_class:
-                target_cats = {"Hybrid"}
-            elif "Sectoral" in asset_class:
-                target_cats = {"Sectoral"}
-        elif "Debt" in asset_class:
-            target_cats = {"Debt"}
-        elif "Gold" in asset_class:
-            target_cats = {"Gold"}
-
-        if not target_cats:
-            continue
-
-        category_funds = df[df["category"].isin(target_cats)].copy()
-
-        if category_funds.empty:
-            continue
-
-        # Sort by ranking score (best first), then NAV for stability
-        sort_cols = []
-        if score_col and score_col in category_funds.columns:
-            sort_cols.append(score_col)
-        if "nav" in category_funds.columns:
-            sort_cols.append("nav")
-        if sort_cols:
-            category_funds = category_funds.sort_values(
-                by=sort_cols, ascending=[False] * len(sort_cols)
-            )
-
-        # --- Dynamic fund selection ---
-        # Use a wider pool and a richer hash seed so that changing
-        # ANY input (age, income, behavior, etc.) causes a different
-        # fund to be picked from the top candidates in each category.
-        pool_size = min(30, len(category_funds))
-
-        # Build a rich hash seed that incorporates the full allocation
-        # fingerprint + risk profile + specific category.
-        # This means Conservative + Debt picks a DIFFERENT debt fund
-        # than Aggressive + Debt.
-        allocation_fingerprint = "|".join(
-            f"{k}:{v}" for k, v in sorted(allocation.items())
-        )
-        hash_seed = (
-            f"{risk_profile}__{investor_type}__{asset_class}"
-            f"__{weight}__{allocation_fingerprint}"
-        )
-        hash_val = int(hashlib.md5(hash_seed.encode()).hexdigest(), 16)
-        offset = hash_val % pool_size
-
-        top_fund = category_funds.iloc[offset].to_dict()
-
-        recommendations.append(
-            {
-                "name": top_fund.get("scheme_name", "N/A"),
-                "category": top_fund.get("category", "N/A"),
-                "allocation_weight": weight,
-                "risk": risk_profile,
-                "1y": top_fund.get("1y", 0.0),
-                "3y": top_fund.get("3y", 0.0),
-                "5y": top_fund.get("5y", 0.0),
-                "sharpe": top_fund.get("sharpe", 0.0),
-                "volatility": top_fund.get("volatility", 0.0),
-                "nav": top_fund.get("nav", 0.0),
-                "date": top_fund.get("date", "N/A"),
-            }
-        )
-
+    
+    # 1. Fetch live market signals from the AI Agents storage cache
+    latest_intelligence = storage.get_latest()
+    if latest_intelligence and "signals" in latest_intelligence:
+        signals = latest_intelligence["signals"]
+        logger.info("[RecommendEngine] Using LIVE market signals for dynamic adjustments.")
+    else:
+        signals = {
+            "market_trend": "neutral",
+            "volatility": "medium",
+            "global_sentiment": "neutral"
+        }
+        logger.warning("[RecommendEngine] Cache miss. Using NEUTRAL market signals.")
+        
+    # 2. Run the dynamic pipeline
+    recommendations = run_dynamic_pipeline(
+        allocation_weights=allocation,
+        risk_profile=risk_profile,
+        market_signals=signals
+    )
+    
+    # Check if the AMFI feed was considered "live" just for frontend display purposes.
+    # In the new architecture, we assume True if we got recommendations since 
+    # the Celery beat updates it continuously.
+    is_live = len(recommendations) > 0
+    
     return recommendations, is_live

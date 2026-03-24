@@ -13,7 +13,7 @@ def test_risk_score_boundaries():
         monthly_savings=50000,
     )
     assert res1["score"] > 7
-    assert res1["category"] == "Aggressive"
+    assert "Aggressive" in res1["category"]  # e.g. "Aggressive (ML Pred)"
 
     # Conservative
     res2 = calculate_risk_score(
@@ -24,4 +24,4 @@ def test_risk_score_boundaries():
         monthly_savings=2000,
     )
     assert res2["score"] < 5
-    assert res2["category"] == "Conservative"
+    assert "Conservative" in res2["category"]  # e.g. "Conservative (ML Pred)"

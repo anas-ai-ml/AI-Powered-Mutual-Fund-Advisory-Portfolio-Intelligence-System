@@ -8,59 +8,81 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from frontend.components.input_form import render_input_form
 from frontend.components.dashboard import render_dashboard
 
-st.set_page_config(page_title="AI Financial Engine", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Institutional Financial Engine", layout="wide")
 
-# Premium Custom CSS
+# Minimal Institutional Custom CSS
 st.markdown(
     """
 <style>
-    /* Dark Theme Optimization */
+    /* Premium Elegant Dark Theme */
     .stApp {
-        background-color: #0e1117;
-        color: #e0e0e0;
+        background-color: #0B0F19 !important;
+        color: #E2E8F0 !important;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    /* Sleek Cards */
+    
+    /* Elegant Cards & Containers */
+    div[data-testid="stForm"], .stSelectbox > div > div, .stNumberInput > div > div {
+        background-color: #111827 !important;
+        border: 1px solid #1F2937 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+        transition: border-color 0.2s ease;
+    }
+    div[data-testid="stForm"]:hover, .stSelectbox > div > div:hover, .stNumberInput > div > div:hover {
+        border-color: #374151 !important;
+    }
+    
+    /* Sleek Typography */
+    h1, h2, h3, h4 {
+        color: #F8FAFC !important;
+        font-weight: 300 !important;
+        letter-spacing: -0.01em;
+        border-bottom: 1px solid #1E293B;
+        padding-bottom: 0.75rem;
+    }
+    p, label, span, div {
+        color: #94A3B8;
+    }
+    
+    /* High-End Metrics */
     div[data-testid="stMetricValue"] {
         font-size: 1.8rem;
-        color: #4facfe;
+        color: #F8FAFC !important;
+        font-weight: 400;
+        letter-spacing: -0.02em;
+        font-family: 'Helvetica Neue', 'Inter', sans-serif;
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 1.1rem;
-        color: #a0aab2;
+        font-size: 0.8rem;
+        color: #64748B !important;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 500;
     }
-    /* Headers & Text */
-    h1, h2, h3 {
-        color: #ffffff;
-        font-family: 'Inter', sans-serif;
-    }
-    /* Input Forms Styling */
-    div[data-testid="stForm"] {
-        background: rgba(30, 41, 59, 0.5);
-        border-radius: 12px;
-        padding: 20px;
-        border: 1px solid #334155;
-    }
-    /* Buttons */
+    
+    /* Premium Button (Muted Slate) */
     div.stButton > button:first-child {
-        background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
-        color: white;
-        border-radius: 8px;
-        border: none;
-        padding: 10px 24px;
-        font-weight: 600;
-        transition: all 0.3s ease;
+        background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%) !important;
+        color: #E2E8F0 !important;
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+        padding: 10px 20px;
+        font-weight: 500;
+        letter-spacing: 0.03em;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2) !important;
+        transition: all 0.2s ease;
     }
     div.stButton > button:first-child:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
-        color: white;
+        border-color: #475569 !important;
+        color: #FFFFFF !important;
     }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-st.title("⚡ AI-Powered Portfolio Intelligence Engine")
+st.title("AI-Powered Portfolio Intelligence Engine")
 
 st.markdown("""
 Welcome to the intelligent terminal. Define your profile on the left to activate the **Financial Quantum Engine** on the right.
@@ -85,4 +107,4 @@ with col2:
 st.markdown("---")
 with open(os.path.join(os.path.dirname(__file__), "..", "DISCLAIMER.txt"), "r") as f:
     disclaimer = f.read()
-st.caption(f"⚠️ **Disclaimer:** {disclaimer}")
+st.caption(f"**Disclaimer:** {disclaimer}")
