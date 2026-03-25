@@ -22,21 +22,33 @@ logger = logging.getLogger(__name__)
 app = Celery("ai_agents")
 app.config_from_object("ai_agents.config.celery_config")
 
-@app.task(bind=True, max_retries=3, default_retry_delay=30, name="ai_agents.tasks.update_fund_universe")
+
+@app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="ai_agents.tasks.update_fund_universe",
+)
 def update_fund_universe(self):
     """
     Daily task to fetch and enrich the entire mutual fund universe.
     """
-    logger.info("⚡ Starting Daily Fund Universe Data Sync")
+    logger.info("Starting Daily Fund Universe Data Sync")
     try:
         result = fund_data_agent.run()
-        logger.info(f"✅ Fund sync complete: {result}")
+        logger.info(f"Fund sync complete: {result}")
         return result
     except Exception as exc:
-        logger.error(f"❌ Fund sync failed: {exc}")
+        logger.error(f"Fund sync failed: {exc}")
         raise self.retry(exc=exc)
 
-@app.task(bind=True, max_retries=3, default_retry_delay=30, name="ai_agents.tasks.run_pipeline")
+
+@app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="ai_agents.tasks.run_pipeline",
+)
 def run_pipeline(self):
     """
     The core asynchronous pipeline.
@@ -46,18 +58,18 @@ def run_pipeline(self):
     4. Adjust portfolio
     5. Store results
     """
-    logger.info("⚡ Starting AI Agents Pipeline execution")
+    logger.info("Starting AI Agents Pipeline execution")
     try:
         market_data = market_agent.run()
         signals = signal_agent.run(market_data)
         prediction = prediction_agent.run(signals)
         decision = decision_agent.run(signals, prediction)
-        
+
         storage.save(market_data, signals, prediction, decision)
-        
-        logger.info("✅ Pipeline executed successfully")
+
+        logger.info("Pipeline executed successfully")
         return {"status": "success", "agent_version": "1.0"}
-        
+
     except Exception as exc:
-        logger.error(f"❌ Pipeline failed: {exc}. Retrying...")
+        logger.error(f"Pipeline failed: {exc}. Retrying...")
         raise self.retry(exc=exc)

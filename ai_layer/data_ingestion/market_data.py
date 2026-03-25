@@ -1,6 +1,6 @@
 """
 ai_layer/data_ingestion/market_data.py
-──────────────────────────────────────
+─────────────────────────────────────
 Fetches real-time market data for the key instruments needed by the
 AI Layer signal and decision engines.
 
@@ -10,6 +10,7 @@ never blocks the rest of the pipeline.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -18,24 +19,37 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 2
+
 # ── Instrument configuration ─────────────────────────────────────────────────
 INSTRUMENTS: Dict[str, str] = {
-    "nifty":   "^NSEI",       # Nifty 50
-    "sensex":  "^BSESN",      # BSE Sensex
-    "vix":     "^INDIAVIX",   # India VIX
-    "sp500":   "^GSPC",       # S&P 500
-    "crude":   "CL=F",        # Crude Oil (WTI)
-    "usdinr":  "INR=X",       # USD-INR exchange rate
+    "nifty": "^NSEI",  # Nifty 50
+    "sensex": "^BSESN",  # BSE Sensex
+    "vix": "^INDIAVIX",  # India VIX
+    "sp500": "^GSPC",  # S&P 500
+    "crude": "CL=F",  # Crude Oil (WTI)
+    "usdinr": "INR=X",  # USD-INR exchange rate
 }
 
 # Hardcoded fallback last-known values (updated periodically)
 _FALLBACKS: Dict[str, Dict[str, Any]] = {
-    "nifty":  {"price": 22500.0, "change_pct": 0.0, "dma_50": 22000.0,  "dma_200": 21500.0},
-    "sensex": {"price": 74000.0, "change_pct": 0.0, "dma_50": 72000.0,  "dma_200": 70000.0},
-    "vix":    {"price": 15.0,    "change_pct": 0.0, "dma_50": 15.0,     "dma_200": 15.0},
-    "sp500":  {"price": 5200.0,  "change_pct": 0.0, "dma_50": 5100.0,   "dma_200": 4900.0},
-    "crude":  {"price": 85.0,    "change_pct": 0.0, "dma_50": 83.0,     "dma_200": 80.0},
-    "usdinr": {"price": 83.5,    "change_pct": 0.0, "dma_50": 83.0,     "dma_200": 82.5},
+    "nifty": {
+        "price": 22500.0,
+        "change_pct": 0.0,
+        "dma_50": 22000.0,
+        "dma_200": 21500.0,
+    },
+    "sensex": {
+        "price": 74000.0,
+        "change_pct": 0.0,
+        "dma_50": 72000.0,
+        "dma_200": 70000.0,
+    },
+    "vix": {"price": 15.0, "change_pct": 0.0, "dma_50": 15.0, "dma_200": 15.0},
+    "sp500": {"price": 5200.0, "change_pct": 0.0, "dma_50": 5100.0, "dma_200": 4900.0},
+    "crude": {"price": 85.0, "change_pct": 0.0, "dma_50": 83.0, "dma_200": 80.0},
+    "usdinr": {"price": 83.5, "change_pct": 0.0, "dma_50": 83.0, "dma_200": 82.5},
 }
 
 
@@ -49,58 +63,91 @@ def _fetch_instrument(key: str, ticker: str) -> Dict[str, Any]:
 
     Returns a dict. Falls back to _FALLBACKS on any error.
     """
-    try:
-        end = datetime.today()
-        start = end - timedelta(days=210)  # A bit extra to ensure 200 trading days
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            end = datetime.today()
+            start = end - timedelta(days=210)
 
-        df = yf.download(
-            ticker,
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            progress=False,
-            auto_adjust=True,
-        )
+            df = yf.download(
+                ticker,
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                progress=False,
+                auto_adjust=True,
+                timeout=10,
+            )
 
-        if df is None or df.empty or len(df) < 5:
-            logger.warning("market_data: No data for %s (%s) — using fallback", key, ticker)
-            return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
+            if df is None or df.empty or len(df) < 5:
+                logger.warning(
+                    "market_data: No data for %s (%s) — using fallback", key, ticker
+                )
+                return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
 
-        # Extract close series (handles MultiIndex from yfinance ≥0.2.38)
-        if hasattr(df.columns, "levels"):
-            close = df["Close"].squeeze()
-        else:
-            close = df["Close"].squeeze()
+            if hasattr(df.columns, "levels"):
+                close = df["Close"].squeeze()
+            else:
+                close = df["Close"].squeeze()
 
-        close = close.dropna()
+            close = close.dropna()
 
-        if len(close) < 5:
-            return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
+            if len(close) < 5:
+                return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
 
-        price = float(close.iloc[-1])
-        prev_price = float(close.iloc[-2]) if len(close) >= 2 else price
-        change_pct = round(((price - prev_price) / prev_price) * 100, 2) if prev_price != 0 else 0.0
+            price = float(close.iloc[-1])
+            prev_price = float(close.iloc[-2]) if len(close) >= 2 else price
+            change_pct = (
+                round(((price - prev_price) / prev_price) * 100, 2)
+                if prev_price != 0
+                else 0.0
+            )
 
-        dma_50 = round(float(close.tail(50).mean()), 2) if len(close) >= 50 else round(float(close.mean()), 2)
-        dma_200 = round(float(close.tail(200).mean()), 2) if len(close) >= 200 else dma_50
+            dma_50 = (
+                round(float(close.tail(50).mean()), 2)
+                if len(close) >= 50
+                else round(float(close.mean()), 2)
+            )
+            dma_200 = (
+                round(float(close.tail(200).mean()), 2) if len(close) >= 200 else dma_50
+            )
 
-        return {
-            "price":      round(price, 2),
-            "change_pct": change_pct,
-            "dma_50":     dma_50,
-            "dma_200":    dma_200,
-            "source":     "live",
-            "ticker":     ticker,
-            "as_of":      str(close.index[-1].date()),
-        }
+            return {
+                "price": round(price, 2),
+                "change_pct": change_pct,
+                "dma_50": dma_50,
+                "dma_200": dma_200,
+                "source": "live",
+                "ticker": ticker,
+                "as_of": str(close.index[-1].date()),
+            }
 
-    except Exception as exc:
-        logger.error("market_data: Error fetching %s (%s): %s", key, ticker, exc)
-        return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_RETRIES - 1:
+                wait_time = INITIAL_BACKOFF * (2**attempt)
+                logger.warning(
+                    f"market_data: Fetch failed for {key} (attempt {attempt + 1}): {exc}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+
+    logger.error(
+        "market_data: All %d attempts failed for %s (%s): %s",
+        MAX_RETRIES,
+        key,
+        ticker,
+        last_error,
+    )
+    return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
 
 
-def get_market_snapshot() -> Dict[str, Any]:
+def get_market_snapshot(use_cache: bool = True) -> Dict[str, Any]:
     """
     Fetch a real-time snapshot for all configured instruments.
+
+    Parameters
+    ----------
+    use_cache : bool
+        If True, try to use cached data before live fetch (default True).
 
     Returns
     -------
@@ -125,8 +172,8 @@ def get_market_snapshot() -> Dict[str, Any]:
             live_count += 1
 
     snapshot["_meta"] = {
-        "fetched_at":  datetime.now().isoformat(timespec="seconds"),
-        "live_count":  live_count,
+        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "live_count": live_count,
         "total_count": len(INSTRUMENTS),
         "is_fully_live": live_count == len(INSTRUMENTS),
     }

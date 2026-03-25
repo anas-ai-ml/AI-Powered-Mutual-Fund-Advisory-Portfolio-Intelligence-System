@@ -1,0 +1,38 @@
+{
+  "stats": {
+    "Equity - Large Cap": {
+      "return": 0.13,
+      "volatility": 0.15
+    },
+    "Equity - Mid Cap": {
+      "return": 0.15,
+      "volatility": 0.2
+    },
+    "Equity - Small Cap": {
+      "return": 0.17,
+      "volatility": 0.25
+    },
+    "Equity - Flexi Cap": {
+      "return": 0.14,
+      "volatility": 0.18
+    },
+    "Equity - Sectoral": {
+      "return": 0.16,
+      "volatility": 0.22
+    },
+    "Equity - Hybrid": {
+      "return": 0.11,
+      "volatility": 0.12
+    },
+    "Debt": {
+      "return": 0.075,
+      "volatility": 0.04
+    },
+    "Gold": {
+      "return": 0.09,
+      "volatility": 0.15
+    }
+  },
+  "correlation_matrix": {},
+  "cached_at": "2026-03-24T17:39:57"
+}

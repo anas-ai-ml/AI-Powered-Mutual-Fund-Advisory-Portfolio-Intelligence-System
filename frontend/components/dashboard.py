@@ -16,6 +16,7 @@ from frontend.components.charts import (
     render_projection_chart,
 )
 from frontend.components.sip_calculator_widget import render_sip_calculator_widget
+
 # ── New Intelligence Layers ───────────────────────────────────────────────────
 from backend.engines.intelligence.context_engine import get_macro_context
 from backend.processors.explainability import (
@@ -30,6 +31,7 @@ from backend.processors.output_formatter import (
     build_scenario_projections,
     get_confidence_band,
 )
+
 # ── Real-Time AI Layer ──────────────────────────────────────────────────
 from ai_layer import get_live_intelligence
 from ai_layer.scheduler.updater import start_scheduler
@@ -66,24 +68,31 @@ def render_dashboard(client_data: dict):
 
     # ── NEW: Risk Explainability ──────────────────────────────────────────────
     risk_xai = explain_risk_profile(risk_profile, client_data)
-    with st.expander("🧠 Why is my risk level this?", expanded=False):
+    with st.expander("Why is my risk level this?", expanded=False):
         st.markdown(risk_xai["summary"])
         st.markdown("**Key factors that shaped your score:**")
         for factor in risk_xai["key_factors"]:
             st.markdown(f"- {factor}")
-        st.info(f"💡 **Recommendation:** {risk_xai['recommendation']}")
+        st.info(f"**Recommendation:** {risk_xai['recommendation']}")
 
     # ── NEW: Macro Environment Card ────────────────────────────────────────────
     macro_fmt = format_macro_summary(macro_context)
     macro_score = macro_context.get("macro_context_score", 1.0)
-    macro_colour = "🟢" if macro_score >= 0.75 else ("🟡" if macro_score >= 0.50 else "🔴")
-    with st.expander(f"{macro_colour} Current Market Environment (Macro Analysis)", expanded=False):
+    macro_colour = (
+        "Strong"
+        if macro_score >= 0.75
+        else ("Moderate" if macro_score >= 0.50 else "Weak")
+    )
+    with st.expander(f"Market Environment: {macro_colour}", expanded=False):
         st.markdown(macro_fmt["simple"])
         st.markdown(macro_fmt["detailed"])
         mc_col1, mc_col2, mc_col3 = st.columns(3)
         mc_col1.metric("Macro Stability", f"{macro_context['macro_context_score']:.0%}")
         mc_col2.metric("Inflation", f"{macro_context['inflation_rate']:.1%}")
-        mc_col3.metric("Policy Rate", f"{macro_context['interest_rate']:.2%} ({macro_context['interest_rate_trend']})")
+        mc_col3.metric(
+            "Policy Rate",
+            f"{macro_context['interest_rate']:.2%} ({macro_context['interest_rate_trend']})",
+        )
 
     # Portfolio Health
     st.markdown("---")
@@ -130,7 +139,7 @@ def render_dashboard(client_data: dict):
 
     # ── NEW: Real-Time AI Intelligence Panel ─────────────────────────────────
     st.markdown("---")
-    st.subheader("🔴 Live Intelligence Panel")
+    st.subheader("Live Intelligence Panel")
 
     # Fetch recommendations first so AI layer can score them
     recommended_funds_base, is_live_data = suggest_mutual_funds(
@@ -144,61 +153,76 @@ def render_dashboard(client_data: dict):
         risk_category=risk_profile["category"],
         use_cache=True,
     )
-    signals        = ai_intel.get("signals", {})
-    narratives     = ai_intel.get("narratives", {})
-    ranked_funds   = ai_intel.get("ranked_funds", recommended_funds_base)
-    data_src       = ai_intel.get("data_source", "fallback")
-    last_upd       = ai_intel.get("last_updated", "unknown")
+    signals = ai_intel.get("signals", {})
+    narratives = ai_intel.get("narratives", {})
+    ranked_funds = ai_intel.get("ranked_funds", recommended_funds_base)
+    data_src = ai_intel.get("data_source", "fallback")
+    last_upd = ai_intel.get("last_updated", "unknown")
 
     # Data freshness badge
     src_badge = {
-        "live":     ("🟢", "Live data"),
-        "partial":  ("🟡", "Partial live data"),
-        "fallback": ("🔴", "Offline — using last known values"),
-    }.get(data_src, ("⚪", data_src))
-    st.caption(f"{src_badge[0]} **{src_badge[1]}** — last refreshed: `{last_upd}` (auto-refreshes every 15 min)")
+        "live": ("●", "Live data"),
+        "partial": ("◐", "Partial live data"),
+        "fallback": ("○", "Offline — using last known values"),
+    }.get(data_src, ("○", data_src))
+    st.caption(
+        f"{src_badge[0]} **{src_badge[1]}** — last refreshed: `{last_upd}` (auto-refreshes every 15 min)"
+    )
 
     # —— Row 1: Live market signal badges ————————————————————————
     if signals:
         sig_c1, sig_c2, sig_c3, sig_c4, sig_c5 = st.columns(5)
-        trend_icon  = "📈" if signals.get("market_trend") == "bullish" else "📉"
-        vol_icon    = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(signals.get("volatility", ""), "⚪")
-        sent_icon   = {"positive": "🟢", "neutral": "🟡", "negative": "🔴"}.get(signals.get("global_sentiment", ""), "⚪")
-        sig_c1.metric("Nifty 50",
+        vol_icon = {"low": "Low", "medium": "Medium", "high": "High"}.get(
+            signals.get("volatility", ""), "—"
+        )
+        sent_icon = {
+            "positive": "Positive",
+            "neutral": "Neutral",
+            "negative": "Negative",
+        }.get(signals.get("global_sentiment", ""), "—")
+        sig_c1.metric(
+            "Nifty 50",
             f"₹{signals.get('nifty_price', 0):,.0f}",
-            f"{signals.get('nifty_change_pct', 0):+.2f}% today")
-        sig_c2.metric(f"{trend_icon} Market Trend", signals.get("market_trend", "—").capitalize())
-        sig_c3.metric(f"{vol_icon} Volatility (VIX)", f"{signals.get('vix_level', 0):.1f}")
-        sig_c4.metric(f"{sent_icon} Global Sentiment", signals.get("global_sentiment", "—").capitalize())
-        sig_c5.metric("💱 USD/INR", f"₹{signals.get('usdinr_price', 0):.2f}")
+            f"{signals.get('nifty_change_pct', 0):+.2f}% today",
+        )
+        sig_c2.metric("Market Trend", signals.get("market_trend", "—").capitalize())
+        sig_c3.metric(f"Volatility (VIX)", f"{signals.get('vix_level', 0):.1f}")
+        sig_c4.metric(
+            "Global Sentiment",
+            signals.get("global_sentiment", "—").capitalize(),
+        )
+        sig_c5.metric("USD/INR", f"₹{signals.get('usdinr_price', 0):.2f}")
 
-    # —— Row 2: Macro metrics —————————————————————————————
+        # —— Row 2: Macro metrics —————————————————————————————
         macro_ind = ai_intel.get("macro_indicators", {})
         m1, m2, m3 = st.columns(3)
-        m1.metric("📈 CPI Inflation (YoY)",
+        m1.metric(
+            "CPI Inflation (YoY)",
             f"{macro_ind.get('cpi_yoy_pct', signals.get('cpi_yoy_pct', 6.0)):.1f}%",
-            macro_ind.get("inflation_trend", "").replace("_", " ").capitalize())
-        m2.metric("🏦 RBI Repo Rate",
+            macro_ind.get("inflation_trend", "").replace("_", " ").capitalize(),
+        )
+        m2.metric(
+            "RBI Repo Rate",
             f"{macro_ind.get('repo_rate_pct', signals.get('repo_rate_pct', 6.5)):.2f}%",
-            macro_ind.get("rate_trend", "").capitalize())
-        m3.metric("📜 10Y Bond Yield",
-            f"{macro_ind.get('bond_yield_pct', 7.1):.2f}%")
+            macro_ind.get("rate_trend", "").capitalize(),
+        )
+        m3.metric("10Y Bond Yield", f"{macro_ind.get('bond_yield_pct', 7.1):.2f}%")
 
     # —— AI Market Summary narrative ————————————————————————
-    with st.expander("🧠 AI Market Narrative", expanded=True):
+    with st.expander("AI Market Narrative", expanded=True):
         st.markdown(narratives.get("market_summary", "—"))
 
     # —— Adaptive Allocation table ————————————————————————
-    eq_d  = ai_intel.get("equity_delta", 0.0)
-    dbt_d = ai_intel.get("debt_delta",   0.0)
-    gld_d = ai_intel.get("gold_delta",   0.0)
+    eq_d = ai_intel.get("equity_delta", 0.0)
+    dbt_d = ai_intel.get("debt_delta", 0.0)
+    gld_d = ai_intel.get("gold_delta", 0.0)
     if any([eq_d != 0, dbt_d != 0, gld_d != 0]):
-        with st.expander("📊 AI Allocation Adjustment (vs MPT Baseline)", expanded=False):
+        with st.expander("AI Allocation Adjustment (vs MPT Baseline)", expanded=False):
             st.markdown(narratives.get("allocation_rationale", ""))
             adj_cols = st.columns(3)
-            adj_cols[0].metric("Equity Adjustment",  f"{eq_d:+.1f}%")
-            adj_cols[1].metric("Debt Adjustment",    f"{dbt_d:+.1f}%")
-            adj_cols[2].metric("Gold Adjustment",    f"{gld_d:+.1f}%")
+            adj_cols[0].metric("Equity Adjustment", f"{eq_d:+.1f}%")
+            adj_cols[1].metric("Debt Adjustment", f"{dbt_d:+.1f}%")
+            adj_cols[2].metric("Gold Adjustment", f"{gld_d:+.1f}%")
 
     # Investment Recommendations
     st.markdown("---")
@@ -212,16 +236,16 @@ def render_dashboard(client_data: dict):
 
     if is_live_data:
         st.success("**Live NAV data from AMFI**")
-        st.info(
-            "**Performance derived from high-liquidity ETF market proxy Models**"
-        )
+        st.info("**Performance derived from high-liquidity ETF market proxy Models**")
     else:
         st.warning(
             "**Live data momentarily unavailable. Using internal fallback dataset.**"
         )
 
     # ── NEW: Generate XAI explanations for all funds ─────────────────────────
-    fund_explanations = {e["name"]: e["reason"] for e in explain_all_funds(recommended_funds)}
+    fund_explanations = {
+        e["name"]: e["reason"] for e in explain_all_funds(recommended_funds)
+    }
     # Build set of AI scores for quick lookup
     ai_scores = {f.get("name", ""): f.get("ai_score") for f in ranked_funds}
 
@@ -232,7 +256,9 @@ def render_dashboard(client_data: dict):
             st.write(f"**Risk Level:** {fund['risk']}")
 
             col_f0, col_f1, col_f2 = st.columns(3)
-            col_f0.metric(f"NAV ({fund.get('date', 'N/A')})", f"₹{fund.get('nav', 0.0):.2f}")
+            col_f0.metric(
+                f"NAV ({fund.get('date', 'N/A')})", f"₹{fund.get('nav', 0.0):.2f}"
+            )
             col_f1.metric("Sharpe Ratio", f"{fund.get('sharpe', 0.0):.2f}")
             col_f2.metric("Annual Volatility", f"{fund.get('volatility', 0.0):.2f}%")
 
@@ -246,14 +272,17 @@ def render_dashboard(client_data: dict):
             # ── NEW: Plain-English fund explanation + AI score ──────────────────
             ai_score = ai_scores.get(fund["name"])
             if ai_score is not None:
-                st.metric("🧠 AI Market Score", f"{ai_score:.1f}/100",
-                    help="Composite score: 30% 1Y return + 30% 3Y return + 20% consistency + 20% market-fit")
+                st.metric(
+                    "AI Market Score",
+                    f"{ai_score:.1f}/100",
+                    help="Composite score: 30% 1Y return + 30% 3Y return + 20% consistency + 20% market-fit",
+                )
             st.divider()
-            st.markdown("**🤖 Why was this fund selected for you?**")
+            st.markdown("**Why was this fund selected for you?**")
             reason_dynamic = fund.get("reason", "")
             reason_xai = fund_explanations.get(fund["name"], "")
             market_reason = fund.get("ai_reason", "")
-            
+
             # Prefer dynamic recommender's native reason, then AI Layer's reason, then static XAI
             if reason_dynamic:
                 st.markdown(reason_dynamic)
@@ -355,8 +384,10 @@ def render_dashboard(client_data: dict):
 
     # ── NEW: Scenario Projections Table ───────────────────────────────────────
     st.markdown("---")
-    st.subheader("📊 Investment Scenarios")
-    st.caption("How your wealth could grow under different market conditions over your investment horizon.")
+    st.subheader("Investment Scenarios")
+    st.caption(
+        "How your wealth could grow under different market conditions over your investment horizon."
+    )
     scenarios = build_scenario_projections(
         existing_corpus=client_data["existing_corpus"],
         monthly_sip=client_data["monthly_savings"],
@@ -366,14 +397,14 @@ def render_dashboard(client_data: dict):
     for i, sc in enumerate(scenarios):
         with sc_cols[i]:
             st.metric(
-                f"{sc['icon']} {sc['scenario']}",
+                f"{sc['scenario']}",
                 f"₹{sc['final_corpus']:,.0f}",
                 f"at {sc['annual_return']} p.a.",
             )
 
     # ── NEW: AI Insight Cards ──────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("🃏 AI Insight Cards")
+    st.subheader("AI Insight Cards")
     insight_cards = build_insight_cards(
         risk_data=risk_profile,
         probability=probability,
@@ -381,12 +412,12 @@ def render_dashboard(client_data: dict):
         macro_context=macro_context,
     )
     card_cols = st.columns(3)
-    colour_map = {"green": "✅", "yellow": "⚠️", "red": "🔴"}
+    colour_map = {"green": "[OK]", "yellow": "[!]", "red": "[!!]"}
     for i, card in enumerate(insight_cards):
         with card_cols[i]:
             icon_prefix = colour_map.get(card["colour"], "")
             st.metric(
-                label=f"{card['icon']} {card['title']}",
+                label=f"{card['title']}",
                 value=card["value"],
             )
             st.caption(f"{icon_prefix} {card['recommendation']}")
