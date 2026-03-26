@@ -172,6 +172,17 @@ def safe_fetch(fetch_func, default_value):
         print(f"[WARNING] Data fetch failed: {e}")
         return default_value
 
+
+def _build_metric_payload(
+    value: float, source: str, fetched_at: str, is_fallback: bool
+) -> Dict[str, Any]:
+    return {
+        "value": value,
+        "source": source,
+        "fetched_at": fetched_at,
+        "is_fallback": is_fallback,
+    }
+
 def _fetch_bond_yield() -> Optional[float]:
     """
     Fetch 10-year India government bond yield.
@@ -224,20 +235,55 @@ def get_macro_indicators(use_cache: bool = True) -> Dict[str, Any]:
 
     results: Dict[str, Any] = {}
     live_count = 0
+    fetched_at = datetime.now().isoformat(timespec="seconds")
+    data_points: Dict[str, Dict[str, Any]] = {}
 
-    cpi = safe_fetch(_compute_cpi_yoy, _FALLBACKS["cpi_yoy_pct"])
-    if cpi != _FALLBACKS["cpi_yoy_pct"]:
+    try:
+        cpi_live = _compute_cpi_yoy()
+    except Exception:
+        cpi_live = None
+    cpi = _FALLBACKS["cpi_yoy_pct"] if cpi_live is None else cpi_live
+    cpi_is_fallback = cpi_live is None
+    if not cpi_is_fallback:
         live_count += 1
+    data_points["cpi_yoy_pct"] = _build_metric_payload(
+        cpi,
+        "FRED" if not cpi_is_fallback else "fallback",
+        fetched_at,
+        cpi_is_fallback,
+    )
     results["cpi_yoy_pct"] = cpi
 
-    repo = safe_fetch(_fetch_repo_rate, _FALLBACKS["repo_rate_pct"])
-    if repo != _FALLBACKS["repo_rate_pct"]:
+    try:
+        repo_live = _fetch_repo_rate()
+    except Exception:
+        repo_live = None
+    repo = _FALLBACKS["repo_rate_pct"] if repo_live is None else repo_live
+    repo_is_fallback = repo_live is None
+    if not repo_is_fallback:
         live_count += 1
+    data_points["repo_rate_pct"] = _build_metric_payload(
+        repo,
+        "RBI" if not repo_is_fallback else "fallback",
+        fetched_at,
+        repo_is_fallback,
+    )
     results["repo_rate_pct"] = repo
 
-    bond = safe_fetch(_fetch_bond_yield, _FALLBACKS["bond_yield_pct"])
-    if bond != _FALLBACKS["bond_yield_pct"]:
+    try:
+        bond_live = _fetch_bond_yield()
+    except Exception:
+        bond_live = None
+    bond = _FALLBACKS["bond_yield_pct"] if bond_live is None else bond_live
+    bond_is_fallback = bond_live is None
+    if not bond_is_fallback:
         live_count += 1
+    data_points["bond_yield_pct"] = _build_metric_payload(
+        bond,
+        "FRED/yfinance" if not bond_is_fallback else "fallback",
+        fetched_at,
+        bond_is_fallback,
+    )
     results["bond_yield_pct"] = bond
 
     cpi_val = results["cpi_yoy_pct"]
@@ -263,7 +309,8 @@ def get_macro_indicators(use_cache: bool = True) -> Dict[str, Any]:
     else:
         results["source"] = "fallback"
 
-    results["fetched_at"] = datetime.now().isoformat(timespec="seconds")
+    results["fetched_at"] = fetched_at
+    results["data_points"] = data_points
     logger.info("macro_data: indicators ready — source=%s", results["source"])
 
     try:
@@ -294,6 +341,17 @@ def macro_fallback() -> Dict[str, Any]:
         "rate_trend": "stable",
         "source": "fallback",
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "data_points": {
+            "cpi_yoy_pct": _build_metric_payload(
+                _FALLBACKS["cpi_yoy_pct"], "fallback", datetime.now().isoformat(timespec="seconds"), True
+            ),
+            "repo_rate_pct": _build_metric_payload(
+                _FALLBACKS["repo_rate_pct"], "fallback", datetime.now().isoformat(timespec="seconds"), True
+            ),
+            "bond_yield_pct": _build_metric_payload(
+                _FALLBACKS["bond_yield_pct"], "fallback", datetime.now().isoformat(timespec="seconds"), True
+            ),
+        },
     }
 
 
@@ -330,4 +388,3 @@ def get_macro_indicators_safe(use_cache: bool = True) -> Dict[str, Any]:
 
     logger.warning("macro_data: all sources failed — using synthetic fallback")
     return macro_fallback()
-

@@ -119,20 +119,17 @@ def analyze_gap(user_data: dict):
     """
 
     try:
-        # Case 1: If class-based implementation exists
-        if "InsuranceGapAnalyzer" in globals():
-            analyzer = InsuranceGapAnalyzer()
-            return analyzer.analyze(user_data)
-
-        # Case 2: If function-based implementation exists
-        elif "calculate_gap" in globals():
-            return calculate_gap(user_data)
-
-        # Fallback
+        insurance_inputs = user_data.get("insurance_inputs", {})
+        annual_income = float(user_data.get("monthly_income", 0.0)) * 12.0
+        recommended_term = annual_income * 10.0
+        term_cover = float(insurance_inputs.get("term_life_cover", 0.0))
+        health_cover = float(insurance_inputs.get("health_cover", 0.0))
         return {
-            "life_gap": 0,
-            "health_gap": 0,
-            "message": "Insurance module fallback used",
+            "life_gap": max(0.0, recommended_term - term_cover),
+            "health_gap": max(0.0, 500000.0 - health_cover),
+            "recommended_term_cover": recommended_term,
+            "current_term_cover": term_cover,
+            "current_health_cover": health_cover,
         }
 
     except Exception as e:

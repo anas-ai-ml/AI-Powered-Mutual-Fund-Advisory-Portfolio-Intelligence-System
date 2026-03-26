@@ -57,7 +57,62 @@ DEFAULT_MACRO = {
     "rate_trend": "stable",
     "source": "fallback",
     "fetched_at": None,
+    "data_points": {
+        "cpi_yoy_pct": {
+            "value": 6.0,
+            "source": "fallback",
+            "fetched_at": None,
+            "is_fallback": True,
+        },
+        "repo_rate_pct": {
+            "value": 6.5,
+            "source": "fallback",
+            "fetched_at": None,
+            "is_fallback": True,
+        },
+        "bond_yield_pct": {
+            "value": 7.1,
+            "source": "fallback",
+            "fetched_at": None,
+            "is_fallback": True,
+        },
+    },
 }
+
+
+def _normalize_macro_data(macro: Dict) -> Dict:
+    """Ensure macro payload always contains per-metric freshness metadata."""
+    normalized = dict(DEFAULT_MACRO)
+    normalized.update(macro or {})
+
+    default_fetched_at = normalized.get("fetched_at")
+    default_source = normalized.get("source", "fallback")
+    normalized_points = {}
+    existing_points = (macro or {}).get("data_points", {})
+
+    for key in ("cpi_yoy_pct", "repo_rate_pct", "bond_yield_pct"):
+        point = existing_points.get(key)
+        if isinstance(point, dict):
+            normalized_points[key] = {
+                "value": point.get("value", normalized.get(key, DEFAULT_MACRO[key])),
+                "source": point.get("source", default_source),
+                "fetched_at": point.get("fetched_at", default_fetched_at),
+                "is_fallback": bool(
+                    point.get("is_fallback", point.get("source", default_source) == "fallback")
+                ),
+            }
+        else:
+            source = "fallback" if default_source == "fallback" else default_source
+            normalized_points[key] = {
+                "value": normalized.get(key, DEFAULT_MACRO[key]),
+                "source": source,
+                "fetched_at": default_fetched_at,
+                "is_fallback": source == "fallback",
+            }
+        normalized[key] = normalized_points[key]["value"]
+
+    normalized["data_points"] = normalized_points
+    return normalized
 
 
 def _read_json(file_path: Path) -> Optional[Dict]:
@@ -167,7 +222,7 @@ def save_macro_data(macro: Dict) -> None:
     """Save macro indicators to cache."""
     with _LOCK:
         data = {
-            "macro": macro,
+            "macro": _normalize_macro_data(macro),
             "cached_at": datetime.now().isoformat(timespec="seconds"),
         }
         _write_json(_MACRO_CACHE_FILE, data)
@@ -182,7 +237,7 @@ def load_macro_data(max_age_seconds: float = 43200) -> Optional[Dict]:
             data = _read_json(_MACRO_CACHE_FILE)
             if data and "macro" in data:
                 logger.info(f"Macro data loaded from cache (age: {age:.0f}s)")
-                return data["macro"]
+                return _normalize_macro_data(data["macro"])
         return None
 
 
@@ -192,7 +247,7 @@ def load_macro_fallback() -> Dict:
     if cached:
         return cached
     logger.warning("Using DEFAULT macro data (no cache)")
-    return DEFAULT_MACRO.copy()
+    return _normalize_macro_data(DEFAULT_MACRO.copy())
 
 
 def clear_all_cache() -> None:

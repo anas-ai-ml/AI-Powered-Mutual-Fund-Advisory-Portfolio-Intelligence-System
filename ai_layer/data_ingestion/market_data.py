@@ -117,6 +117,8 @@ def _fetch_instrument(key: str, ticker: str) -> Dict[str, Any]:
                 "dma_50": dma_50,
                 "dma_200": dma_200,
                 "source": "live",
+                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                "is_fallback": False,
                 "ticker": ticker,
                 "as_of": str(close.index[-1].date()),
             }
@@ -137,7 +139,13 @@ def _fetch_instrument(key: str, ticker: str) -> Dict[str, Any]:
         ticker,
         last_error,
     )
-    return {**_FALLBACKS[key], "source": "fallback", "ticker": ticker}
+    return {
+        **_FALLBACKS[key],
+        "source": "fallback",
+        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "is_fallback": True,
+        "ticker": ticker,
+    }
 
 
 def get_market_snapshot(use_cache: bool = True) -> Dict[str, Any]:

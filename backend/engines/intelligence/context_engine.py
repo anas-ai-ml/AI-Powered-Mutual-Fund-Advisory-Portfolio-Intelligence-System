@@ -15,6 +15,7 @@ Design principles:
 import os
 import csv
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -188,18 +189,60 @@ def get_macro_context(
         * ``explanation``          – plain-English summary for end users
     """
     try:
+        context_fetched_at = datetime.now().isoformat(timespec="seconds")
         # ── Resolve inputs (caller → CSV → hard default) ─────────────────
         csv_inflation = _load_inflation_from_csv(_CSV_PATH)
+        used_fallback = False
 
-        inf_rate = inflation_rate if inflation_rate is not None else (
-            csv_inflation if csv_inflation is not None else _DEFAULTS["inflation_rate"]
-        )
-        int_rate         = interest_rate       if interest_rate       is not None else _DEFAULTS["interest_rate"]
-        geo_risk         = geopolitical_risk   if geopolitical_risk   is not None else _DEFAULTS["geopolitical_risk"]
-        mkt_vol          = market_volatility   if market_volatility   is not None else _DEFAULTS["market_volatility"]
-        com_trend        = commodity_trend     if commodity_trend     is not None else _DEFAULTS["commodity_trend"]
-        int_trend        = interest_rate_trend if interest_rate_trend is not None else _DEFAULTS["interest_rate_trend"]
-        base_conf        = base_confidence     if base_confidence     is not None else _DEFAULTS["base_confidence"]
+        if inflation_rate is not None:
+            inf_rate = inflation_rate
+            inflation_meta = {
+                "value": round(float(inf_rate), 4),
+                "source": "caller",
+                "fetched_at": context_fetched_at,
+                "is_fallback": False,
+            }
+        elif csv_inflation is not None:
+            inf_rate = csv_inflation
+            inflation_meta = {
+                "value": round(float(inf_rate), 4),
+                "source": "inflation_data.csv",
+                "fetched_at": context_fetched_at,
+                "is_fallback": False,
+            }
+        else:
+            used_fallback = True
+            inf_rate = _DEFAULTS["inflation_rate"]
+            inflation_meta = {
+                "value": round(float(inf_rate), 4),
+                "source": "fallback",
+                "fetched_at": context_fetched_at,
+                "is_fallback": True,
+            }
+
+        if interest_rate is not None:
+            int_rate = interest_rate
+            policy_rate_meta = {
+                "value": round(float(int_rate), 4),
+                "source": "caller",
+                "fetched_at": context_fetched_at,
+                "is_fallback": False,
+            }
+        else:
+            used_fallback = True
+            int_rate = _DEFAULTS["interest_rate"]
+            policy_rate_meta = {
+                "value": round(float(int_rate), 4),
+                "source": "fallback",
+                "fetched_at": context_fetched_at,
+                "is_fallback": True,
+            }
+
+        geo_risk = geopolitical_risk if geopolitical_risk is not None else _DEFAULTS["geopolitical_risk"]
+        mkt_vol = market_volatility if market_volatility is not None else _DEFAULTS["market_volatility"]
+        com_trend = commodity_trend if commodity_trend is not None else _DEFAULTS["commodity_trend"]
+        int_trend = interest_rate_trend if interest_rate_trend is not None else _DEFAULTS["interest_rate_trend"]
+        base_conf = base_confidence if base_confidence is not None else _DEFAULTS["base_confidence"]
 
         # ── Compute sub-scores ─────────────────────────────────────────────
         inflation_impact = _compute_inflation_impact(inf_rate)
@@ -245,8 +288,12 @@ def get_macro_context(
             "commodity_trend":      com_trend,
             "interest_rate":        round(int_rate, 4),
             "inflation_rate":       round(inf_rate, 4),
+            "inflation":            inflation_meta,
+            "policy_rate":          policy_rate_meta,
             "adjusted_confidence":  adjusted_confidence,
             "explanation":          explanation,
+            "fetched_at":           context_fetched_at,
+            "source":               "fallback" if used_fallback else "live",
         }
 
     except Exception as exc:
@@ -265,6 +312,20 @@ def _neutral_defaults() -> Dict[str, Any]:
         "commodity_trend":      "neutral",
         "interest_rate":        _DEFAULTS["interest_rate"],
         "inflation_rate":       _DEFAULTS["inflation_rate"],
+        "inflation": {
+            "value": _DEFAULTS["inflation_rate"],
+            "source": "fallback",
+            "fetched_at": None,
+            "is_fallback": True,
+        },
+        "policy_rate": {
+            "value": _DEFAULTS["interest_rate"],
+            "source": "fallback",
+            "fetched_at": None,
+            "is_fallback": True,
+        },
         "adjusted_confidence":  _DEFAULTS["base_confidence"],
         "explanation":          "Macro environment data unavailable. Using neutral defaults.",
+        "fetched_at":           None,
+        "source":               "fallback",
     }

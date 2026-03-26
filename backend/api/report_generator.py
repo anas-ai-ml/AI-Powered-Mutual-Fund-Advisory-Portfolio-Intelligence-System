@@ -488,24 +488,42 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
     goals_raw = analysis_data.get("goals", [])
     goals = []
     for g in goals_raw:
+        sip_comparison = g.get("sip_comparison", {})
+        roi_value = float(g.get("expected_return_rate", g.get("return_pct", 0.12)))
+        inflation_value = float(g.get("inflation_rate", 0.06))
         goals.append({
             "name": g.get("name", "Goal"),
             "years": g.get("years_to_goal", 10),
             "future_value": g.get("future_corpus", 0),
-            "roi": g.get("return_pct", 12.0),
-            "inflation": g.get("inflation_rate", 6.0),
+            "roi": round(roi_value * 100 if roi_value <= 1 else roi_value, 2),
+            "inflation": round(
+                inflation_value * 100 if inflation_value <= 1 else inflation_value, 2
+            ),
             "required_sip": g.get("required_sip", 0),
-            "step_up": 10 if g.get("future_corpus", 0) > 1000000 else 5,
+            "step_up": sip_comparison.get("annual_step_up_pct", g.get("annual_sip_step_up", 0.10) * 100),
+            "sip_comparison": sip_comparison,
             "annuity": g.get("future_corpus", 0) * 0.005 # Mock annuity rule
         })
 
     # 4. Insurance & Liabilities
     existing_ins = client_data.get("existing_insurance", {})
+    insurance_inputs = client_data.get("insurance_inputs", {})
+    outstanding_loans = insurance_inputs.get("outstanding_loans", [])
+    total_liabilities = sum(
+        float(loan.get("outstanding_principal", 0.0)) for loan in outstanding_loans
+    )
+    total_emi = sum(float(loan.get("emi", 0.0)) for loan in outstanding_loans)
+    recommended_term_cover = float(profile.get("monthly_income", 0.0)) * 12.0 * 10.0
     insurance = {
         "life_cover": existing_ins.get("term", 0),
         "life_gap": analyze_insurance_gap(profile, existing_ins).get("term_gap", 0),
         "health_cover": existing_ins.get("health", 0),
         "health_gap": calculate_health_insurance_gap(profile, existing_ins).get("gap", 0),
+        "annual_insurance_premium": insurance_inputs.get("annual_insurance_premium", 0.0),
+        "recommended_term_cover": recommended_term_cover,
+        "total_liabilities": total_liabilities,
+        "total_emi": total_emi,
+        "loans": outstanding_loans,
         "recommendations": generate_insurance_recommendations(profile, existing_ins)
     }
 
@@ -525,6 +543,10 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
 
     portfolio = {
         "total_corpus": portfolio_raw.get("total_corpus", 0.0),
+        "net_worth": portfolio_raw.get(
+            "net_worth", portfolio_raw.get("total_corpus", 0.0) - total_liabilities
+        ),
+        "total_liabilities": portfolio_raw.get("total_liabilities", total_liabilities),
         "diversification_score": div_score,
         "insights_v2": insights_v2
     }
@@ -565,16 +587,26 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         })
 
     # 9. Scenarios & Projections
+    primary_goal_raw = goals_raw[0] if goals_raw else {}
+    primary_sip_comparison = primary_goal_raw.get("sip_comparison", {})
     scenarios = {
         "base_roi": 12.0,
-        "step_up_pct": 10,
+        "step_up_pct": primary_sip_comparison.get(
+            "annual_step_up_pct",
+            client_data.get("annual_sip_step_up_pct", 10.0),
+        ),
         "inflation_rate": 6.0,
         "inflation_adjusted": True,
         "projections": [
             {"year": 5, "base_val": profile["monthly_savings"] * 70, "step_val": profile["monthly_savings"] * 85},
             {"year": 10, "base_val": profile["monthly_savings"] * 180, "step_val": profile["monthly_savings"] * 240},
             {"year": 20, "base_val": profile["monthly_savings"] * 600, "step_val": profile["monthly_savings"] * 950}
-        ]
+        ],
+        "step_up_comparison": [
+            primary_sip_comparison.get("flat", {}),
+            primary_sip_comparison.get("step_up", {}),
+        ],
+        "step_up_note": primary_sip_comparison.get("note", ""),
     }
 
     # 10. Monte Carlo
@@ -620,5 +652,6 @@ def generate_full_report(client_data, analysis_data):
         scenarios=v2_data["scenarios"],
         investment_mode=v2_data["investment_mode"]
     )
-    
-    return {"status": "success", "pdf_path": output_path, "data": v2_data}
+
+    with open(output_path, "rb") as pdf_file:
+        return pdf_file.read()

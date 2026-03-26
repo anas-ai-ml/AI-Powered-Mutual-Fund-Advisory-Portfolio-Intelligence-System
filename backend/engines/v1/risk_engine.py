@@ -16,6 +16,13 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, x)))
 
 
+def _extract_macro_value(val):
+    """Handle both plain float and per-field metadata dict formats."""
+    if isinstance(val, dict):
+        return float(val.get("value", 0))
+    return float(val) if val is not None else 0.0
+
+
 # Deterministic Equity/Debt/Gold mapping via piecewise linear interpolation.
 # These anchor points are chosen to make the example explicit:
 #   score=6.0 -> equity≈55%, debt≈35%, gold≈10%
@@ -183,7 +190,7 @@ def compute_risk(
     if macro_score is None:
         macro_score = 0.5
 
-    macro_score = float(macro_score)
+    macro_score = _extract_macro_value(macro_score)
     # If someone passes percent or 0–100 scale, normalize.
     if macro_score > 1.0:
         macro_score = macro_score / 100.0 if macro_score <= 100 else macro_score / 10.0
@@ -193,22 +200,25 @@ def compute_risk(
     if vix is None:
         mv = macro_data.get("market_volatility")
         # Context engine comment: ~15 VIX corresponds to market_volatility ~0.25
-        vix = 15.0 * (float(mv) / 0.25) if mv is not None else 15.0
+        mv = _extract_macro_value(mv) if mv is not None else None
+        vix = 15.0 * (mv / 0.25) if mv is not None else 15.0
 
     inflation = macro_data.get("inflation", None)
     if inflation is None:
         inflation = macro_data.get("inflation_rate", 5.0)
     # inflation_rate from context_engine is a decimal (e.g. 0.06). detect_market_regime
     # uses percent thresholds (e.g. 6), so normalize when needed.
-    inflation = float(inflation)
+    inflation = _extract_macro_value(inflation)
     if inflation <= 1.0:
         inflation *= 100.0
 
     repo_rate = macro_data.get("repo_rate", None)
     if repo_rate is None:
         repo_rate = macro_data.get("interest_rate", 6.0)
+    repo_rate = _extract_macro_value(repo_rate)
+    vix = _extract_macro_value(vix)
 
-    regime = detect_market_regime(float(vix), float(inflation), float(repo_rate))
+    regime = detect_market_regime(vix, inflation, repo_rate)
 
     raw_score = ml_model.predict(user_input, macro_score)
 

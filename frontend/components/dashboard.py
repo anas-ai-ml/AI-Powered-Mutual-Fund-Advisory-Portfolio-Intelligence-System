@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import datetime
 from backend.engines.risk_engine import compute_risk
 from backend.engines.goal_engine import (
     calculate_retirement_goal,
@@ -7,12 +8,17 @@ from backend.engines.goal_engine import (
 from backend.engines.allocation_engine import get_asset_allocation
 from backend.engines.monte_carlo_engine import run_monte_carlo_simulation
 from backend.engines.portfolio_engine import analyze_portfolio
-from backend.engines.projection_engine import generate_projection_table
 from backend.engines.recommendation_engine import suggest_mutual_funds
 from backend.api.report_generator import generate_full_report
 from frontend.components.charts import (
     render_allocation_chart,
     render_projection_chart,
+)
+from frontend.components.projection_panels import (
+    build_goal_horizon_table,
+    build_projection_timeline_table,
+    build_step_up_comparison_table,
+    render_assumptions_box,
 )
 from frontend.components.sip_calculator_widget import render_sip_calculator_widget
 from frontend.components.score_intelligence_panel import render_score_intelligence_panel
@@ -25,6 +31,7 @@ from backend.processors.explainability import (
     explain_portfolio_health,
 )
 from backend.processors.output_formatter import (
+    build_projection_assumptions,
     format_macro_summary,
     format_monte_carlo_summary,
     build_insight_cards,
@@ -40,6 +47,59 @@ from ai_layer.scheduler.updater import start_scheduler
 if "_ai_scheduler_started" not in st.session_state:
     start_scheduler()
     st.session_state["_ai_scheduler_started"] = True
+
+
+def _parse_iso_timestamp(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _format_freshness_label(metric_meta: dict) -> str:
+    if metric_meta.get("is_fallback"):
+        return "🔴 ⚠️ Fallback data — live fetch failed"
+
+    fetched_at = _parse_iso_timestamp(metric_meta.get("fetched_at"))
+    if fetched_at is None:
+        return "🟡 Cached data timestamp unavailable"
+
+    age_seconds = max(0.0, (datetime.now() - fetched_at).total_seconds())
+    if age_seconds <= 1800:
+        return f"✅ Live as of {fetched_at.strftime('%H:%M')}"
+
+    hours_ago = max(1, round(age_seconds / 3600))
+    return f"🟡 Cached {hours_ago}h ago"
+
+
+def _get_macro_metric_meta(macro_indicators: dict, key: str, fallback_value: float) -> dict:
+    data_points = macro_indicators.get("data_points", {})
+    point = data_points.get(key, {})
+    return {
+        "value": point.get("value", macro_indicators.get(key, fallback_value)),
+        "source": point.get("source", macro_indicators.get("source", "fallback")),
+        "fetched_at": point.get("fetched_at", macro_indicators.get("fetched_at")),
+        "is_fallback": bool(
+            point.get(
+                "is_fallback",
+                macro_indicators.get("source", "fallback") == "fallback",
+            )
+        ),
+    }
+
+
+def _get_vix_metric_meta(signals: dict, market_snapshot: dict) -> dict:
+    vix_data = (market_snapshot or {}).get("vix", {})
+    return {
+        "value": float(signals.get("vix_level", vix_data.get("price", 15.0))),
+        "source": vix_data.get("source", "fallback"),
+        "fetched_at": vix_data.get(
+            "fetched_at", (market_snapshot or {}).get("_meta", {}).get("fetched_at")
+        ),
+        "is_fallback": bool(vix_data.get("is_fallback", vix_data.get("source") == "fallback")),
+    }
 
 
 def render_dashboard(client_data: dict):
@@ -61,6 +121,14 @@ def render_dashboard(client_data: dict):
         "behavior": 2 if client_data["behavior"].lower() == "moderate" else (1 if client_data["behavior"].lower() == "conservative" else 3)
     }
     risk_profile = compute_risk(user_inputs, macro_context)
+    context_inflation_meta = macro_context.get(
+        "inflation",
+        {"value": macro_context.get("inflation_rate", 0.06), "source": "fallback", "fetched_at": None, "is_fallback": True},
+    )
+    context_policy_rate_meta = macro_context.get(
+        "policy_rate",
+        {"value": macro_context.get("interest_rate", 0.065), "source": "fallback", "fetched_at": None, "is_fallback": True},
+    )
 
     # Pre-compute values required for the always-visible Score Intelligence Panel.
     # Important: the panel component itself does not re-compute; it only renders these precomputed values.
@@ -71,7 +139,23 @@ def render_dashboard(client_data: dict):
         existing_mutual_funds=client_data["existing_mutual_funds"],
         risk_score=risk_profile["score"],
         monthly_income=client_data.get("monthly_income", 0.0),
+        current_cpi=float(context_inflation_meta.get("value", 0.06)) * 100.0,
+        goal_years=int(client_data.get("target_retirement_age", client_data["age"] + 10) - client_data["age"]),
+        term_life_cover=float(client_data.get("insurance_inputs", {}).get("term_life_cover", 0.0)),
+        outstanding_loans=client_data.get("insurance_inputs", {}).get("outstanding_loans", []),
     )
+    effective_monthly_savings = float(
+        client_data.get("effective_monthly_savings", client_data["monthly_savings"])
+    )
+    context_inflation_rate = float(
+        context_inflation_meta.get("value", macro_context.get("inflation_rate", 0.06))
+    )
+    context_inflation_source = str(
+        context_inflation_meta.get("source", "Fallback macro context")
+    )
+    projection_base_roi = 0.13
+    annual_sip_step_up_pct = float(client_data.get("annual_sip_step_up_pct", 10.0))
+    projection_topup_rate = max(0.0, annual_sip_step_up_pct / 100.0)
 
     allocation = get_asset_allocation(risk_profile["score"])
 
@@ -90,6 +174,15 @@ def render_dashboard(client_data: dict):
     ranked_funds = ai_intel.get("ranked_funds", recommended_funds_base)
     data_src = ai_intel.get("data_source", "fallback")
     last_upd = ai_intel.get("last_updated", "unknown")
+    macro_indicators_live = ai_intel.get("macro_indicators", {})
+    market_snapshot = ai_intel.get("market_snapshot", {})
+    live_inflation_meta = _get_macro_metric_meta(macro_indicators_live, "cpi_yoy_pct", 6.0)
+    live_repo_meta = _get_macro_metric_meta(macro_indicators_live, "repo_rate_pct", 6.5)
+    live_bond_meta = _get_macro_metric_meta(macro_indicators_live, "bond_yield_pct", 7.1)
+    vix_meta = _get_vix_metric_meta(signals, market_snapshot)
+    critical_macro_fallback = any(
+        item.get("is_fallback") for item in (live_inflation_meta, live_repo_meta, vix_meta)
+    )
 
     # Goal Confidence Band: only available if a retirement goal is set.
     ret_result = None
@@ -103,16 +196,22 @@ def render_dashboard(client_data: dict):
             ret_result = calculate_retirement_goal(
                 current_age=client_data["age"],
                 current_monthly_expense=ret_expense,
-                expected_return_rate=0.13,
+                expected_return_rate=projection_base_roi,
                 retirement_age=client_data["target_retirement_age"],
                 existing_corpus=client_data["existing_corpus"],
+                post_retirement_income=ret_data.get("post_retirement_income"),
+                post_retirement_years=int(ret_data.get("post_retirement_years", 25)),
+                include_post_retirement_income=bool(
+                    ret_data.get("include_post_retirement_income", False)
+                ),
+                annual_sip_step_up=projection_topup_rate,
             )
             probability = run_monte_carlo_simulation(
                 initial_corpus=client_data["existing_corpus"],
-                monthly_sip=client_data["monthly_savings"],
+                monthly_sip=effective_monthly_savings,
                 years=ret_result["years_to_goal"],
                 target_corpus=ret_result["future_corpus"],
-                expected_annual_return=0.13,
+                expected_annual_return=projection_base_roi,
                 annual_volatility=0.15,
             )
     except Exception:
@@ -127,7 +226,7 @@ def render_dashboard(client_data: dict):
     if ret_result is not None and probability is not None and probability < 50.0:
         from backend.utils.sip_calculator import calculate_sip_future_value
 
-        current_sip = float(client_data["monthly_savings"])
+        current_sip = effective_monthly_savings
         required_sip = float(ret_result.get("required_sip", 0.0))
         required_corpus = float(ret_result.get("future_corpus", 0.0))
         years = int(ret_result.get("years_to_goal", 0))
@@ -152,7 +251,7 @@ def render_dashboard(client_data: dict):
                 new_ret = calculate_retirement_goal(
                     current_age=client_data["age"],
                     current_monthly_expense=ret_expense,
-                    expected_return_rate=0.13,
+                    expected_return_rate=projection_base_roi,
                     retirement_age=new_ret_age,
                     existing_corpus=client_data["existing_corpus"],
                 )
@@ -174,7 +273,7 @@ def render_dashboard(client_data: dict):
 
         # Option 3: Reduce target corpus to what current SIP can achieve (Monte Carlo re-check)
         existing_corpus = float(client_data["existing_corpus"])
-        expected_annual_return = 0.13
+        expected_annual_return = projection_base_roi
         annual_volatility = 0.15
 
         # Achievable corpus at horizon using current SIP for the "shortfall" portion.
@@ -271,11 +370,13 @@ def render_dashboard(client_data: dict):
         st.markdown(macro_fmt["detailed"])
         mc_col1, mc_col2, mc_col3 = st.columns(3)
         mc_col1.metric("Macro Stability", f"{macro_context['macro_context_score']:.0%}")
-        mc_col2.metric("Inflation", f"{macro_context['inflation_rate']:.1%}")
+        mc_col2.metric("Inflation", f"{context_inflation_meta.get('value', macro_context['inflation_rate']):.1%}")
+        mc_col2.caption(_format_freshness_label(context_inflation_meta))
         mc_col3.metric(
             "Policy Rate",
-            f"{macro_context['interest_rate']:.2%} ({macro_context['interest_rate_trend']})",
+            f"{context_policy_rate_meta.get('value', macro_context['interest_rate']):.2%} ({macro_context['interest_rate_trend']})",
         )
+        mc_col3.caption(_format_freshness_label(context_policy_rate_meta))
 
     # Portfolio Health
     st.markdown("---")
@@ -287,8 +388,16 @@ def render_dashboard(client_data: dict):
             "Total Existing Corpus",
             f"₹{portfolio_analysis.get('total_corpus', 0.0):,.0f}",
         )
+        st.metric(
+            "Net Worth",
+            f"₹{portfolio_analysis.get('net_worth', 0.0):,.0f}",
+        )
         st.markdown(f"**Diversification Score:** {portfolio_analysis['diversification_score']} / 10")
         st.markdown(f"**Risk Exposure:** {portfolio_analysis.get('risk_exposure', 'N/A')}")
+        if portfolio_analysis.get("total_liabilities", 0) > 0:
+            st.caption(
+                f"Liabilities: ₹{portfolio_analysis.get('total_liabilities', 0.0):,.0f} | EMI: ₹{portfolio_analysis.get('emi_total', 0.0):,.0f}/month"
+            )
 
     with col_p2:
         # ── NEW: Portfolio Explainability ─────────────────────────────────────
@@ -296,8 +405,22 @@ def render_dashboard(client_data: dict):
         st.markdown(f"**{portfolio_xai['headline']}**")
         st.markdown(portfolio_xai["narrative"])
         st.write("**Actionable Insights:**")
-        for insight in portfolio_analysis["insights"]:
-            st.info(insight)
+        severity_styles = {
+            "high": ("#7f1d1d", "#fecaca"),
+            "medium": ("#78350f", "#fde68a"),
+            "low": ("#14532d", "#bbf7d0"),
+        }
+        for insight in portfolio_analysis.get("prioritized_insights", []):
+            bg, border = severity_styles.get(insight.get("severity", "low"), ("#14532d", "#bbf7d0"))
+            st.markdown(
+                f"""
+                <div style="background:{bg};border-left:4px solid {border};padding:12px 14px;border-radius:8px;margin-bottom:10px;">
+                    <div style="color:{border};font-weight:600;margin-bottom:4px;">{insight.get("icon", "INFO").upper()} · {insight.get("severity", "low").capitalize()}</div>
+                    <div style="color:#f8fafc;line-height:1.5;">{insight.get("message", "")}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     # Asset Allocation
     st.markdown("---")
@@ -317,6 +440,10 @@ def render_dashboard(client_data: dict):
     st.caption(
         f"{src_badge[0]} **{src_badge[1]}** — last refreshed: `{last_upd}` (auto-refreshes every 15 min)"
     )
+    if critical_macro_fallback:
+        st.warning(
+            "Some live market data is unavailable. Recommendations are based on last known values. Accuracy may be reduced."
+        )
 
     # —— Row 1: Live market signal badges ————————————————————————
     if signals:
@@ -336,6 +463,7 @@ def render_dashboard(client_data: dict):
         )
         sig_c2.metric("Market Trend", signals.get("market_trend", "—").capitalize())
         sig_c3.metric(f"Volatility (VIX)", f"{signals.get('vix_level', 0):.1f}")
+        sig_c3.caption(_format_freshness_label(vix_meta))
         sig_c4.metric(
             "Global Sentiment",
             signals.get("global_sentiment", "—").capitalize(),
@@ -343,19 +471,21 @@ def render_dashboard(client_data: dict):
         sig_c5.metric("USD/INR", f"₹{signals.get('usdinr_price', 0):.2f}")
 
         # —— Row 2: Macro metrics —————————————————————————————
-        macro_ind = ai_intel.get("macro_indicators", {})
         m1, m2, m3 = st.columns(3)
         m1.metric(
             "CPI Inflation (YoY)",
-            f"{macro_ind.get('cpi_yoy_pct', signals.get('cpi_yoy_pct', 6.0)):.1f}%",
-            macro_ind.get("inflation_trend", "").replace("_", " ").capitalize(),
+            f"{live_inflation_meta.get('value', signals.get('cpi_yoy_pct', 6.0)):.1f}%",
+            macro_indicators_live.get("inflation_trend", "").replace("_", " ").capitalize(),
         )
+        m1.caption(_format_freshness_label(live_inflation_meta))
         m2.metric(
             "RBI Repo Rate",
-            f"{macro_ind.get('repo_rate_pct', signals.get('repo_rate_pct', 6.5)):.2f}%",
-            macro_ind.get("rate_trend", "").capitalize(),
+            f"{live_repo_meta.get('value', signals.get('repo_rate_pct', 6.5)):.2f}%",
+            macro_indicators_live.get("rate_trend", "").capitalize(),
         )
-        m3.metric("10Y Bond Yield", f"{macro_ind.get('bond_yield_pct', 7.1):.2f}%")
+        m2.caption(_format_freshness_label(live_repo_meta))
+        m3.metric("10Y Bond Yield", f"{live_bond_meta.get('value', 7.1):.2f}%")
+        m3.caption(_format_freshness_label(live_bond_meta))
 
     # —— AI Market Summary narrative ————————————————————————
     with st.expander("AI Market Narrative", expanded=True):
@@ -451,20 +581,81 @@ def render_dashboard(client_data: dict):
             st.info("Set a retirement goal to see required corpus and SIP.")
         else:
             st.markdown(f"#### Retirement ({ret_result['years_to_goal']} Yrs)")
-            st.metric(
-                "Required Future Corpus", f"₹{ret_result['future_corpus']:,.0f}"
-            )
-            st.metric("Required Monthly SIP", f"₹{ret_result['required_sip']:,.0f}")
+            if ret_result.get("post_retirement_income_planning_enabled"):
+                acc_col, dist_col = st.columns(2)
+                with acc_col:
+                    st.markdown("**Accumulation Phase**")
+                    st.metric(
+                        "Corpus needed by retirement age",
+                        f"₹{ret_result['future_corpus']:,.0f}",
+                    )
+                    st.metric(
+                        "Required monthly SIP",
+                        f"₹{ret_result['required_sip']:,.0f}",
+                    )
+                distribution = ret_result.get("distribution_phase", {})
+                with dist_col:
+                    st.markdown("**Distribution Phase**")
+                    st.metric(
+                        "Corpus that will sustain income",
+                        (
+                            f"₹{distribution.get('annuity_corpus_required', 0.0):,.0f}"
+                            f" for ₹{distribution.get('monthly_income', 0.0):,.0f}/month"
+                        ),
+                    )
+                    gap_value = float(distribution.get("shortfall_or_surplus", 0.0))
+                    gap_label = "Shortfall" if gap_value < 0 else "Surplus"
+                    st.metric(gap_label, f"₹{abs(gap_value):,.0f}")
+                extra_sip = float(
+                    ret_result.get("distribution_phase", {}).get(
+                        "additional_sip_required", 0.0
+                    )
+                )
+                years = int(ret_result.get("distribution_phase", {}).get("years", 25))
+                income_need = float(
+                    ret_result.get("distribution_phase", {}).get("monthly_income", 0.0)
+                )
+                st.caption(
+                    f"Corpus that will sustain ₹{income_need:,.0f}/month for {years} years is shown above."
+                )
+                if extra_sip > 0:
+                    st.warning(
+                        f"You need to increase your SIP by ₹{extra_sip:,.0f} to cover your post-retirement income needs."
+                    )
+            else:
+                st.metric(
+                    "Required Future Corpus", f"₹{ret_result['future_corpus']:,.0f}"
+                )
+                st.metric("Required Monthly SIP", f"₹{ret_result['required_sip']:,.0f}")
+            if ret_result.get("sip_comparison"):
+                st.markdown("**SIP Step-Up Comparison**")
+                st.dataframe(
+                    build_step_up_comparison_table(ret_result["sip_comparison"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(ret_result["sip_comparison"].get("note", ""))
 
     edu_data = client_data["goals"]["education"]
     edu_result = calculate_child_education_goal(
-        edu_data["cost"], edu_data["years"], expected_return_rate=0.13
+        edu_data["cost"],
+        edu_data["years"],
+        expected_return_rate=projection_base_roi,
+        annual_sip_step_up=projection_topup_rate,
     )
 
     with col2:
         st.markdown(f"#### Education ({edu_result['years_to_goal']} Yrs)")
         st.metric("Required Future Corpus", f"₹{edu_result['future_corpus']:,.0f}")
         st.metric("Required Monthly SIP", f"₹{edu_result['required_sip']:,.0f}")
+        if edu_result.get("sip_comparison"):
+            st.markdown("**SIP Step-Up Comparison**")
+            st.dataframe(
+                build_step_up_comparison_table(edu_result["sip_comparison"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(edu_result["sip_comparison"].get("note", ""))
 
     # Projection + confidence sections are only available if the retirement goal was set.
     if ret_result is None or probability is None:
@@ -473,11 +664,29 @@ def render_dashboard(client_data: dict):
     else:
         # Projection Chart
         st.markdown("---")
-        st.subheader("Wealth Projection Timeline")
+        st.subheader("SIP Projection Timeline")
+        timeline_assumptions = build_projection_assumptions(
+            inflation_rate=context_inflation_rate,
+            inflation_source=context_inflation_source,
+            roi=projection_base_roi,
+            roi_basis="Retirement projection base-case assumption",
+            sip_topup_rate=projection_topup_rate,
+        )
+        render_assumptions_box(timeline_assumptions)
+        st.dataframe(
+            build_projection_timeline_table(
+                initial_investment=client_data["existing_corpus"],
+                monthly_sip=effective_monthly_savings,
+                annual_return_rate=projection_base_roi,
+                years=ret_result["years_to_goal"],
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
         render_projection_chart(
             client_data["existing_corpus"],
-            client_data["monthly_savings"],
-            0.13,
+            effective_monthly_savings,
+            projection_base_roi,
             ret_result["years_to_goal"],
         )
 
@@ -525,7 +734,7 @@ def render_dashboard(client_data: dict):
                 import numpy as np
                 import plotly.graph_objects as go
 
-                current_sip = float(client_data["monthly_savings"])
+                current_sip = effective_monthly_savings
                 required_sip = float(ret_result.get("required_sip", 0.0))
                 years = int(ret_result.get("years_to_goal", 0))
                 target_corpus = float(ret_result.get("future_corpus", 0.0))
@@ -540,7 +749,7 @@ def render_dashboard(client_data: dict):
                             monthly_sip=float(sip),
                             years=years,
                             target_corpus=target_corpus,
-                            expected_annual_return=0.13,
+                            expected_annual_return=projection_base_roi,
                             annual_volatility=0.15,
                         )
                         for sip in sips
@@ -575,7 +784,7 @@ def render_dashboard(client_data: dict):
                                 monthly_sip=current_sip,
                                 years=years,
                                 target_corpus=target_corpus,
-                                expected_annual_return=0.13,
+                                expected_annual_return=projection_base_roi,
                                 annual_volatility=0.15,
                             )],
                             mode="markers",
@@ -613,23 +822,44 @@ def render_dashboard(client_data: dict):
 
         # ── NEW: Scenario Projections Table ───────────────────────────────────────
         st.markdown("---")
-        st.subheader("Investment Scenarios")
+        st.subheader("Expected Returns (Goal Horizon)")
         st.caption(
             "How your wealth could grow under different market conditions over your investment horizon."
         )
+        scenario_probabilities = {}
+        for scenario_name, annual_rate in (
+            ("conservative", 0.08),
+            ("moderate", 0.12),
+            ("aggressive", 0.15),
+        ):
+            scenario_probabilities[scenario_name] = run_monte_carlo_simulation(
+                initial_corpus=client_data["existing_corpus"],
+                monthly_sip=effective_monthly_savings,
+                years=ret_result["years_to_goal"],
+                target_corpus=ret_result["future_corpus"],
+                expected_annual_return=annual_rate,
+                annual_volatility=0.15,
+            )
         scenarios = build_scenario_projections(
             existing_corpus=client_data["existing_corpus"],
-            monthly_sip=client_data["monthly_savings"],
+            monthly_sip=effective_monthly_savings,
             years=ret_result["years_to_goal"],
+            inflation_rate=context_inflation_rate,
+            success_probabilities=scenario_probabilities,
         )
-        sc_cols = st.columns(3)
-        for i, sc in enumerate(scenarios):
-            with sc_cols[i]:
-                st.metric(
-                    f"{sc['scenario']}",
-                    f"₹{sc['final_corpus']:,.0f}",
-                    f"at {sc['annual_return']} p.a.",
-                )
+        scenario_assumptions = build_projection_assumptions(
+            inflation_rate=context_inflation_rate,
+            inflation_source=context_inflation_source,
+            roi=0.12,
+            roi_basis="Goal-horizon moderate scenario assumption",
+            sip_topup_rate=projection_topup_rate,
+        )
+        render_assumptions_box(scenario_assumptions)
+        st.dataframe(
+            build_goal_horizon_table(scenarios),
+            use_container_width=True,
+            hide_index=True,
+        )
 
         # ── NEW: AI Insight Cards ──────────────────────────────────────────────────
         st.markdown("---")
@@ -654,60 +884,61 @@ def render_dashboard(client_data: dict):
     # SIP Calculator Widget
     st.markdown("---")
     st.subheader("Interactive Scenario Builder")
-    render_sip_calculator_widget()
+    render_sip_calculator_widget(macro_context=macro_context)
 
     # Generate PDF Report
     st.markdown("---")
     st.subheader("Client Investment Proposal")
 
     if st.button("Generate Detailed PDF Report"):
-        with st.spinner("Generating proposal..."):
-            if ret_result is None or probability is None:
-                st.info("Set a retirement goal to generate the PDF proposal.")
-            else:
-                # Module 5: Prepare SIP Projections (5, 10, 20 Years) at 12%
-                sip_amount = client_data["monthly_savings"]
-                initial = client_data["existing_corpus"]
+        st.session_state["pending_pdf_generation"] = True
 
-                sip_projections = {}
-                for y in [5, 10, 20]:
-                    df = generate_projection_table(initial, sip_amount, 0.12, y)
-                    sip_projections[f"{y} Years"] = df.iloc[-1]["total_value"]
-
-                # Module 5: Prepare Expected Returns Scenarios
-                # Using the retirement timeframe for this module's requirement
-                years = ret_result["years_to_goal"]
-                expected_returns = {
-                    "Conservative (8%)": generate_projection_table(
-                        initial, sip_amount, 0.08, years
-                    ).iloc[-1]["total_value"],
-                    "Moderate (12%)": generate_projection_table(
-                        initial, sip_amount, 0.12, years
-                    ).iloc[-1]["total_value"],
-                    "Aggressive (15%)": generate_projection_table(
-                        initial, sip_amount, 0.15, years
-                    ).iloc[-1]["total_value"],
-                }
-
+    if st.session_state.get("pending_pdf_generation"):
+        if ret_result is None or probability is None:
+            st.info("Set a retirement goal to generate the PDF proposal.")
+            st.session_state["pending_pdf_generation"] = False
+        elif critical_macro_fallback and not st.session_state.get("stale_pdf_confirmed"):
+            st.warning(
+                "Live market data is stale. Generate report with cached data?"
+            )
+            confirm_col1, confirm_col2 = st.columns(2)
+            if confirm_col1.button("Proceed", key="confirm_stale_pdf"):
+                st.session_state["stale_pdf_confirmed"] = True
+                st.rerun()
+            if confirm_col2.button("Wait for Live Data", key="cancel_stale_pdf"):
+                st.session_state["pending_pdf_generation"] = False
+                st.session_state["stale_pdf_confirmed"] = False
+                st.rerun()
+        else:
+            with st.spinner("Generating proposal..."):
                 analysis_results = {
                     "risk": risk_profile,
                     "goals": [ret_result, edu_result],
                     "portfolio": portfolio_analysis,
                     "macro": macro_context,
                     "funds": recommended_funds,
-                    "monte_carlo": {"success_probability": probability}
+                    "monte_carlo": {"success_probability": probability},
                 }
 
-                report_result = generate_full_report(client_data, analysis_results)
-                pdf_path = report_result["pdf_path"]
-                with open(pdf_path, "rb") as pdf_file:
-                    pdf_bytes = pdf_file.read()
-                    st.download_button(
-                        label="Download Investment Proposal (PDF)",
-                        data=pdf_bytes,
-                        file_name="Investment_Proposal.pdf",
-                        mime="application/pdf",
-                    )
+                try:
+                    report_client_data = {
+                        **client_data,
+                        "monthly_savings": effective_monthly_savings,
+                    }
+                    pdf_bytes = generate_full_report(report_client_data, analysis_results)
+                    if pdf_bytes:
+                        st.download_button(
+                            label="📄 Download PDF Report",
+                            data=pdf_bytes,
+                            file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                        )
+                    else:
+                        st.error("Report generation failed — no output returned.")
+                except Exception as e:
+                    st.error(f"Report generation error: {e}")
+            st.session_state["pending_pdf_generation"] = False
+            st.session_state["stale_pdf_confirmed"] = False
 
     # --- Insurance Gap Analysis & Advisor Overrides (non-blocking) ---
     try:
@@ -720,6 +951,10 @@ def render_dashboard(client_data: dict):
     try:
         st.metric("Life Cover Gap", insurance_gap.get("life_gap", 0))
         st.metric("Health Cover Gap", insurance_gap.get("health_gap", 0))
+        if client_data.get("emi_total", 0) > 0:
+            st.caption(
+                f"₹{client_data.get('emi_total', 0.0):,.0f}/month EMI deducted from savings capacity."
+            )
     except:
         st.write("Insurance data unavailable")
 
@@ -738,8 +973,30 @@ def render_dashboard(client_data: dict):
     st.markdown("---")
     from backend.api.report_generator import generate_full_report
     if st.button("Download Advanced Report"):
-        generate_full_report(client_data, {
-            "risk": risk_profile,
-            "allocation": allocation,
-            "insurance": insurance_gap
-        })
+        if critical_macro_fallback:
+            st.warning(
+                "Live market data is stale. Use 'Generate Detailed PDF Report' to confirm report generation with cached data."
+            )
+        else:
+            with st.spinner("Generating report..."):
+                try:
+                    report_client_data = {
+                        **client_data,
+                        "monthly_savings": effective_monthly_savings,
+                    }
+                    pdf_bytes = generate_full_report(report_client_data, {
+                        "risk": risk_profile,
+                        "allocation": allocation,
+                        "insurance": insurance_gap
+                    })
+                    if pdf_bytes:
+                        st.download_button(
+                            label="📄 Download PDF Report",
+                            data=pdf_bytes,
+                            file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf"
+                        )
+                    else:
+                        st.error("Report generation failed — no output returned.")
+                except Exception as e:
+                    st.error(f"Report generation error: {e}")

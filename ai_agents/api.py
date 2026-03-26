@@ -34,7 +34,10 @@ async def health_check():
     """
     Check if the API and its underlying datastores are healthy.
     """
-    cache_status = "ok" if _redis and _redis.ping() else "down"
+    try:
+        cache_status = "ok" if _redis and _redis.ping() else "down"
+    except Exception:
+        cache_status = "down"
     return {"status": "ok", "redis_cache": cache_status, "agent_version": "1.0"}
 
 @app.get("/live-advice")

@@ -254,6 +254,7 @@
     <div class="section">
         <h2>5. Existing Portfolio Health</h2>
         <p>Current Corpus: <strong>₹{{ "{:,.0f}".format(portfolio.get('total_corpus', 0)) }}</strong> | 
+           Net Worth: <strong>₹{{ "{:,.0f}".format(portfolio.get('net_worth', 0)) }}</strong> |
            Diversification: <strong>{{ portfolio.get('diversification_score', 0) }}/10</strong></p>
         
         <div class="insights-container">
@@ -265,10 +266,36 @@
         </div>
     </div>
 
-    <!-- 6. INSURANCE & LIABILITY SUMMARY -->
+    <!-- 6a. INSURANCE & LIABILITY SUMMARY -->
     <div class="section">
-        <h2>6. Insurance & Liability Summary</h2>
+        <h2>6a. Insurance & Liability Summary</h2>
         <p>A robust plan must protect against catastrophic risks before seeking market alpha.</p>
+        <p>
+            Term Cover: <strong>₹{{ "{:,.0f}".format(insurance.get('life_cover', 0)) }}</strong> |
+            Recommended: <strong>₹{{ "{:,.0f}".format(insurance.get('recommended_term_cover', 0)) }}</strong> |
+            Health Cover: <strong>₹{{ "{:,.0f}".format(insurance.get('health_cover', 0)) }}</strong> |
+            Annual Premium: <strong>₹{{ "{:,.0f}".format(insurance.get('annual_insurance_premium', 0)) }}</strong>
+        </p>
+        <p>
+            Total Liabilities: <strong>₹{{ "{:,.0f}".format(insurance.get('total_liabilities', 0)) }}</strong> |
+            Monthly EMI: <strong>₹{{ "{:,.0f}".format(insurance.get('total_emi', 0)) }}</strong>
+        </p>
+        {% if insurance.get('loans') %}
+        <table class="data-table">
+            <tr>
+                <th>Loan Type</th>
+                <th>Outstanding Principal</th>
+                <th>Monthly EMI</th>
+            </tr>
+            {% for loan in insurance.get('loans', []) %}
+            <tr>
+                <td>{{ loan.type }}</td>
+                <td>₹{{ "{:,.0f}".format(loan.outstanding_principal) }}</td>
+                <td>₹{{ "{:,.0f}".format(loan.emi) }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
         <table class="data-table">
             <tr>
                 <th>Risk Type</th>
@@ -363,6 +390,29 @@
             - All future values are <strong>{{ "Inflation Adjusted" if scenarios.inflation_adjusted else "Nominal" }}</strong>.
             - Base Inflation: {{ scenarios.inflation_rate }}%.
         </div>
+        {% if scenarios.get('step_up_comparison') and scenarios.step_up_comparison[0] %}
+        <table class="data-table" style="margin-top: 16px;">
+            <tr>
+                <th>Mode</th>
+                <th>Monthly SIP (Year 1)</th>
+                <th>Corpus at Goal</th>
+                <th>Total Invested</th>
+                <th>Wealth Multiplier</th>
+            </tr>
+            {% for row in scenarios.step_up_comparison %}
+            <tr>
+                <td>{{ row.mode }}</td>
+                <td>₹{{ "{:,.0f}".format(row.monthly_sip_year_1) }}</td>
+                <td>₹{{ "{:,.0f}".format(row.corpus_at_goal) }}</td>
+                <td>₹{{ "{:,.0f}".format(row.total_invested) }}</td>
+                <td>{{ "{:.2f}".format(row.wealth_multiplier) }}x</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% if scenarios.get('step_up_note') %}
+        <p style="font-size: 11px;">💡 <em>{{ scenarios.step_up_note }}</em></p>
+        {% endif %}
+        {% endif %}
     </div>
 
     <!-- 11. MONTE CARLO SIMULATION -->

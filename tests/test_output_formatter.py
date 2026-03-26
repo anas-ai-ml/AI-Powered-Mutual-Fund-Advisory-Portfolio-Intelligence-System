@@ -9,6 +9,7 @@ from backend.processors.output_formatter import (
     format_macro_summary,
     format_monte_carlo_summary,
     build_insight_cards,
+    build_projection_assumptions,
     build_scenario_projections,
 )
 
@@ -82,6 +83,21 @@ class TestGetConfidenceBand:
 def test_disclaimer_is_non_empty():
     d = get_disclaimer()
     assert isinstance(d, str) and len(d) > 20
+
+
+def test_build_projection_assumptions_contains_required_fields():
+    assumptions = build_projection_assumptions(
+        inflation_rate=0.065,
+        inflation_source="RBI CPI Q1 2026",
+        roi=0.12,
+        roi_basis="Goal-horizon moderate scenario assumption",
+        sip_topup_rate=0.10,
+    )
+    assert assumptions["inflation_rate"] == "6.5% — Source: RBI CPI Q1 2026"
+    assert assumptions["expected_roi"] == "12.0% — Basis: Goal-horizon moderate scenario assumption"
+    assert assumptions["base_return_scenarios"]["conservative"] == "8%"
+    assert assumptions["sip_topup_rate"] == "10.0% annual step-up"
+    assert "LTCG" in assumptions["tax_treatment"]
 
 
 # ── format_risk_summary ──────────────────────────────────────────────────────
@@ -166,14 +182,14 @@ class TestBuildScenarioProjections:
     def test_scenario_names(self):
         result = build_scenario_projections(100000, 5000, 10)
         names = [s["scenario"] for s in result]
-        assert "Best Case" in names
-        assert "Expected Case" in names
-        assert "Worst Case" in names
+        assert "Conservative" in names
+        assert "Moderate" in names
+        assert "Aggressive" in names
 
-    def test_best_greater_than_worst(self):
+    def test_aggressive_greater_than_conservative(self):
         result = build_scenario_projections(100000, 5000, 10)
         by_name = {s["scenario"]: s["final_corpus"] for s in result}
-        assert by_name["Best Case"] > by_name["Expected Case"] > by_name["Worst Case"]
+        assert by_name["Aggressive"] > by_name["Moderate"] > by_name["Conservative"]
 
     def test_zero_corpus(self):
         result = build_scenario_projections(0, 5000, 5)
@@ -184,3 +200,24 @@ class TestBuildScenarioProjections:
         result = build_scenario_projections(100000, 0, 10)
         for sc in result:
             assert sc["final_corpus"] >= 100000  # corpus should at least grow
+
+    def test_inflation_adjusted_corpus_is_lower_than_nominal(self):
+        result = build_scenario_projections(100000, 5000, 10, inflation_rate=0.06)
+        for sc in result:
+            assert sc["inflation_adjusted_corpus"] < sc["final_corpus"]
+
+    def test_probability_mapping_is_applied(self):
+        result = build_scenario_projections(
+            100000,
+            5000,
+            10,
+            success_probabilities={
+                "conservative": 62.4,
+                "moderate": 74.8,
+                "aggressive": 83.1,
+            },
+        )
+        by_name = {s["scenario"]: s for s in result}
+        assert by_name["Conservative"]["probability"] == 62.4
+        assert by_name["Moderate"]["probability"] == 74.8
+        assert by_name["Aggressive"]["probability"] == 83.1

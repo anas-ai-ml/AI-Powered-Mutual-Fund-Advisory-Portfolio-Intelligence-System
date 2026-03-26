@@ -1,20 +1,6 @@
 {
   "signals": {
-    "market_trend": "bearish",
-    "volatility": "high",
-    "inflation_trend": "stable",
-    "interest_rate_trend": "stable",
-    "global_sentiment": "positive",
-    "usdinr_pressure": "inr_weakening",
-    "golden_cross": false,
-    "vix_level": 24.64,
-    "cpi_yoy_pct": 6.0,
-    "repo_rate_pct": 6.5,
-    "nifty_price": 23306.45,
-    "nifty_change_pct": 1.72,
-    "usdinr_price": 94.3,
-    "crude_price": 90.32,
-    "signal_source": "partial"
+    "test": "signals"
   },
-  "cached_at": "2026-03-26T01:10:54"
+  "cached_at": "2026-03-26T17:28:30"
 }

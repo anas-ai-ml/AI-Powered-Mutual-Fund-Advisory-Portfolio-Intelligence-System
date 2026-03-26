@@ -119,6 +119,45 @@ _CATEGORY_DESCRIPTIONS: Dict[str, str] = {
 }
 
 
+def explain_fund_rationale(fund: Dict[str, Any]) -> Dict[str, str]:
+    name: str = fund.get("name", "This fund")
+    category: str = fund.get("category", "")
+    risk: str = fund.get("risk", "Moderate").split("(")[0].strip()
+    volatility: float = float(fund.get("volatility", 0.0))
+    alpha_3y: float = float(fund.get("alpha_3y", 0.0))
+    benchmark_index: str = fund.get("benchmark_index", "its benchmark")
+    market_reason: str = fund.get("market_reason", "")
+    market_fit_reason: str = fund.get("market_fit_reason", "")
+
+    why_selected = (
+        f"Consistently outperformed {benchmark_index} by {alpha_3y:.1f}% over 3Y."
+        if alpha_3y > 0
+        else f"Selected for resilient category-relative performance against {benchmark_index}."
+    )
+
+    why_now = market_reason or market_fit_reason or (
+        f"{category} exposure fits the current market regime for a {risk.lower()} investor."
+    )
+
+    if volatility >= 20:
+        risk_note = (
+            f"High volatility at {volatility:.1f}% — suitable only for {risk} profiles with 5+ year horizon."
+        )
+    elif "debt" in category.lower() or "gold" in category.lower():
+        risk_note = "Lower drawdown profile, but returns may lag equity in strong bull markets."
+    else:
+        risk_note = f"Moderate volatility at {volatility:.1f}% — stay invested through cycles for the thesis to play out."
+
+    return {
+        "why_selected": why_selected,
+        "why_now": why_now,
+        "risk_note": risk_note,
+        "summary": (
+            f"**{name}**: {why_selected} {why_now} {risk_note}"
+        ),
+    }
+
+
 def explain_fund_recommendation(fund: Dict[str, Any]) -> str:
     """
     Generate a one-paragraph plain-English reason for a single fund recommendation.
@@ -176,6 +215,10 @@ def explain_fund_recommendation(fund: Dict[str, Any]) -> str:
     elif volatility > 20:
         parts.append("Higher volatility is expected for this category — best held for the long term.")
 
+    rationale = explain_fund_rationale(fund)
+    parts.append(rationale["why_selected"])
+    parts.append(rationale["why_now"])
+    parts.append(rationale["risk_note"])
     return " ".join(parts)
 
 
@@ -186,7 +229,11 @@ def explain_all_funds(funds: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     Returns a list of ``{"name": ..., "reason": ...}`` dicts.
     """
     return [
-        {"name": f.get("name", "Fund"), "reason": explain_fund_recommendation(f)}
+        {
+            "name": f.get("name", "Fund"),
+            "reason": explain_fund_recommendation(f),
+            "rationale": explain_fund_rationale(f),
+        }
         for f in funds
     ]
 

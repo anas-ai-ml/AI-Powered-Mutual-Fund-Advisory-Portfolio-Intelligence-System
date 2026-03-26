@@ -46,6 +46,16 @@ _MC_COLOUR: Dict[str, str] = {
     "low": "red",
 }
 
+_DEFAULT_BASE_RETURN_SCENARIOS = {
+    "conservative": "8%",
+    "moderate": "12%",
+    "aggressive": "15%",
+}
+
+_DEFAULT_TAX_TREATMENT = (
+    "Pre-tax returns shown. LTCG @ 10% applicable on equity gains above ₹1L/year."
+)
+
 
 # ─────────────────────────────────────────────────────────────────
 # Helper utilities
@@ -80,6 +90,44 @@ def get_confidence_band(confidence: float) -> Dict[str, str]:
 def get_disclaimer() -> str:
     """Return the standard investment disclaimer string."""
     return DISCLAIMER
+
+
+def build_projection_assumptions(
+    inflation_rate: float,
+    inflation_source: str,
+    roi: float,
+    roi_basis: str,
+    sip_topup_rate: float = 0.10,
+    tax_treatment: str = _DEFAULT_TAX_TREATMENT,
+) -> Dict[str, Any]:
+    """
+    Build a normalized assumptions payload for SIP projection outputs.
+
+    Parameters
+    ----------
+    inflation_rate : float
+        Inflation assumption as a decimal fraction.
+    inflation_source : str
+        Source label for the inflation input.
+    roi : float
+        Expected annual return assumption as a decimal fraction.
+    roi_basis : str
+        Narrative basis for the ROI assumption.
+    sip_topup_rate : float, optional
+        Annual SIP step-up assumption as a decimal fraction.
+    tax_treatment : str, optional
+        Disclosure shown alongside projections.
+    """
+    inflation_label = inflation_source or "Fallback macro context"
+    roi_label = roi_basis or "Planner baseline assumption"
+
+    return {
+        "inflation_rate": f"{inflation_rate:.1%} — Source: {inflation_label}",
+        "expected_roi": f"{roi:.1%} — Basis: {roi_label}",
+        "base_return_scenarios": dict(_DEFAULT_BASE_RETURN_SCENARIOS),
+        "sip_topup_rate": f"{sip_topup_rate:.1%} annual step-up",
+        "tax_treatment": tax_treatment,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -361,9 +409,11 @@ def build_scenario_projections(
     existing_corpus: float,
     monthly_sip: float,
     years: int,
+    inflation_rate: float = 0.06,
+    success_probabilities: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Compute Best / Expected / Worst corpus projections using three return rates.
+    Compute scenario corpus projections using three return rates.
 
     Uses standard compound-growth formula with monthly compounding:
         FV = P × (1+r)^n + SIP × [((1+r)^n − 1) / r]
@@ -377,21 +427,27 @@ def build_scenario_projections(
         Monthly SIP contribution in INR.
     years : int
         Investment horizon in years.
+    inflation_rate : float, optional
+        Inflation assumption used to compute today's-rupee corpus.
+    success_probabilities : dict, optional
+        Optional map of scenario name or lowercase key to success probability.
 
     Returns
     -------
     List[dict]
         Three scenario dicts each with ``scenario``, ``annual_return``,
-        ``final_corpus``, ``colour``, ``icon``.
+        ``final_corpus``, ``inflation_adjusted_corpus``, ``probability``,
+        ``colour``, ``icon``.
     """
     scenarios = [
-        ("Best Case", 0.15, "green", "[Best]"),
-        ("Expected Case", 0.12, "yellow", "[Expected]"),
-        ("Worst Case", 0.08, "red", "[Worst]"),
+        ("Conservative", 0.08, "green", "[Conservative]"),
+        ("Moderate", 0.12, "yellow", "[Moderate]"),
+        ("Aggressive", 0.15, "red", "[Aggressive]"),
     ]
 
     results = []
     months = years * 12
+    success_probabilities = success_probabilities or {}
 
     for name, annual_rate, colour, icon in scenarios:
         r = annual_rate / 12  # monthly rate
@@ -402,11 +458,23 @@ def build_scenario_projections(
                 ((1 + r) ** months - 1) / r
             )
 
+        real_value = (
+            fv / ((1 + inflation_rate) ** years)
+            if years > 0 and inflation_rate > -1.0
+            else fv
+        )
+        probability = success_probabilities.get(name)
+        if probability is None:
+            probability = success_probabilities.get(name.lower())
+
         results.append(
             {
                 "scenario": name,
                 "annual_return": f"{annual_rate:.0%}",
+                "return_assumption": f"{annual_rate:.0%}",
                 "final_corpus": round(fv, 0),
+                "inflation_adjusted_corpus": round(real_value, 0),
+                "probability": round(float(probability), 1) if probability is not None else None,
                 "colour": colour,
                 "icon": icon,
             }

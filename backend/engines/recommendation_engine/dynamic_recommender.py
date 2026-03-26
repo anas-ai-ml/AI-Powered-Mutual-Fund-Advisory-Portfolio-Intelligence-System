@@ -10,6 +10,8 @@ import pandas as pd
 import logging
 from typing import Dict, Any, List
 
+from config import EXCLUDE_ETF_FROM_ADVISORY
+from backend.data.benchmark_indices import enrich_with_benchmark_metrics, infer_fund_type
 from .quality_filter import apply_quality_filter
 from .scoring_engine import score_funds
 from .user_matching import apply_user_matching
@@ -19,6 +21,22 @@ logger = logging.getLogger(__name__)
 FUNDS_CSV_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "ai_agents", "data", "mutual_funds.csv")
 )
+
+
+def _market_fit_reason(category: str, risk_profile: str, market_signals: Dict[str, Any]) -> str:
+    trend = str(market_signals.get("market_trend", "neutral")).lower()
+    volatility = str(market_signals.get("volatility", "medium")).lower()
+    category_lower = str(category).lower()
+
+    if volatility == "high" and ("large cap" in category_lower or "debt" in category_lower):
+        return "Large-cap preferred as volatility is elevated, limiting drawdown risk."
+    if trend == "bullish" and ("mid cap" in category_lower or "small cap" in category_lower):
+        return "Bullish market momentum supports higher-beta categories for upside capture now."
+    if "gold" in category_lower:
+        return "Gold exposure is timely as a hedge against macro and inflation shocks."
+    if "debt" in category_lower:
+        return "Debt exposure is timely while capital preservation matters more than chasing peak returns."
+    return f"{category} exposure fits the current market regime for your {risk_profile.lower()} profile."
 
 def run_dynamic_pipeline(
     allocation_weights: Dict[str, float],
@@ -43,6 +61,11 @@ def run_dynamic_pipeline(
     except Exception as e:
         logger.error(f"Failed to load fund universe: {e}")
         return []
+
+    df = df.copy()
+    df["fund_type"] = df["scheme_name"].apply(infer_fund_type)
+    if EXCLUDE_ETF_FROM_ADVISORY:
+        df = df[df["fund_type"] != "ETF"].copy()
 
     # 2. Quality Filter (Drop bad funds)
     df = apply_quality_filter(df)
@@ -100,20 +123,11 @@ def run_dynamic_pipeline(
         
         vol_str = "low" if top_fund.get("volatility", 1) < 0.12 else "higher"
         
-        # Base Explanation
-        reason = f"Selected for strong multi-factor ranking (Score: {score:.1f}). "
-        reason += f"It matches your {risk_profile} risk profile with consistent historical returns and {vol_str} volatility. "
-        
-        # Market Alignment Narrative
-        trend = market_signals.get('market_trend', 'neutral')
-        if trend == 'bearish' and ("large" in top_fund.get('category','').lower() or "debt" in top_fund.get('category','').lower()):
-            reason += "Current market conditions are bearish, making this defensive posture highly ideal."
-        elif trend == 'bullish' and ("small" in top_fund.get('category','').lower() or "mid" in top_fund.get('category','').lower()):
-            reason += "Bullish market momentum provides strong upside capture for this category."
-        elif "debt" in top_fund.get('category','').lower():
-            reason += "Provides excellent capital preservation against market fluctuations."
-            
-        recommendations.append({
+        market_reason = _market_fit_reason(
+            top_fund.get("category", ""), risk_profile, market_signals
+        )
+
+        recommendation = {
             "name": top_fund.get("scheme_name", "Unknown Fund"),
             "category": top_fund.get("category", "N/A"),
             "risk": risk_profile,
@@ -123,11 +137,19 @@ def run_dynamic_pipeline(
             "5y": top_fund.get("5y", 0.0),
             "score": score,
             "confidence": confidence,
-            "reason": reason,
+            "reason": (
+                f"Selected for strong multi-factor ranking (Score: {score:.1f}). "
+                f"It matches your {risk_profile} risk profile with consistent historical returns and {vol_str} volatility. "
+                f"{market_reason}"
+            ),
             "nav": top_fund.get("nav", 0.0), # legacy support
             "date": top_fund.get("date", "N/A"), # legacy support
             "volatility": top_fund.get("volatility", 0.0), # legacy support
-            "sharpe": top_fund.get("sharpe", 0.0) # legacy support
-        })
+            "sharpe": top_fund.get("sharpe", 0.0), # legacy support
+            "fund_type": top_fund.get("fund_type", infer_fund_type(top_fund.get("scheme_name", ""))),
+            "market_reason": market_reason,
+            "market_fit_reason": market_reason,
+        }
+        recommendations.append(enrich_with_benchmark_metrics(recommendation))
 
     return recommendations

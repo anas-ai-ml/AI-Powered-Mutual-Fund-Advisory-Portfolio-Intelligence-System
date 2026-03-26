@@ -1,0 +1,22 @@
+{
+  "Nifty 50 TRI": {
+    "1y_return": 18.4,
+    "3y_return": 14.1,
+    "volatility": 15.8
+  },
+  "Nifty Midcap 150 TRI": {
+    "1y_return": 24.7,
+    "3y_return": 18.9,
+    "volatility": 22.6
+  },
+  "CRISIL Short Term Bond Index": {
+    "1y_return": 7.1,
+    "3y_return": 6.8,
+    "volatility": 4.1
+  },
+  "Gold Price Index": {
+    "1y_return": 22.8,
+    "3y_return": 15.4,
+    "volatility": 17.2
+  }
+}
