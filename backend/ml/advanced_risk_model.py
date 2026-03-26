@@ -1,11 +1,13 @@
 import numpy as np
 from typing import Dict, Any, Optional
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 
 class AdvancedRiskModel:
     def __init__(self):
-        self.model = GradientBoostingRegressor()
+        # Random Forest gives more stable, non-linear risk capacity mapping
+        # from standardized investor profile features.
+        self.model = RandomForestRegressor(n_estimators=200, random_state=42)
         self.feature_weights = {
             "age": 0.25,
             "savings_ratio": 0.25,
@@ -21,7 +23,12 @@ class AdvancedRiskModel:
         self._model_trained = True
 
     def _encode_behavior(self, behavior: str) -> float:
-        behavior_lower = behavior.lower().strip()
+        # Accept both UI-friendly strings and numeric encodings.
+        if isinstance(behavior, (int, float)):
+            # Expected numeric mapping: conservative=1, moderate=2, aggressive=3
+            return float(max(1.0, min(3.0, behavior)))
+
+        behavior_lower = str(behavior).lower().strip()
         if "aggressive" in behavior_lower or "high" in behavior_lower:
             return 3.0
         elif "moderate" in behavior_lower or "balanced" in behavior_lower:
@@ -75,11 +82,15 @@ class AdvancedRiskModel:
         behavior_norm = (self._encode_behavior(behavior) - 1) / 2.0
         dependents_norm = self._normalize_dependents(dependents)
 
+        # Risk capacity typically decreases with age and with more dependents.
+        age_capacity_norm = 1.0 - age_norm
+        dependents_capacity_norm = 1.0 - dependents_norm
+
         raw_score = (
-            age_norm * self.feature_weights["age"]
+            age_capacity_norm * self.feature_weights["age"]
             + savings_norm * self.feature_weights["savings_ratio"]
             + behavior_norm * self.feature_weights["behavior"]
-            + dependents_norm * self.feature_weights["dependents"]
+            + dependents_capacity_norm * self.feature_weights["dependents"]
         ) * 10
 
         return raw_score

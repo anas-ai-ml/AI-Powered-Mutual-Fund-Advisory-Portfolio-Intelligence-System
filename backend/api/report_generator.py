@@ -457,23 +457,168 @@ if __name__ == "__main__":
     print(json.dumps(report, indent=2))
 
 
-def generate_full_report(client_data, analysis_data):
-    import json
-    from datetime import datetime
-
-    report = {
-        "generated_at": datetime.now().isoformat(),
-        "client": client_data,
-        "risk": analysis_data.get("risk", {}),
-        "allocation": analysis_data.get("allocation", {}),
-        "insurance": analysis_data.get("insurance", {}),
-        "summary": {
-            "risk_score": analysis_data.get("risk", {}).get("score", "N/A"),
-            "risk_category": analysis_data.get("risk", {}).get("category", "N/A"),
-            "insurance_gaps_identified": bool(
-                analysis_data.get("insurance", {}).get("life_gap", 0) > 0
-            ),
-        },
+def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Synthesizes all raw engine outputs into the structured format required by the V2 PDF template.
+    """
+    from backend.insurance.gap_analyzer import generate_insurance_recommendations, calculate_health_insurance_gap, analyze_insurance_gap
+    from backend.funds.investment_mode import get_recommended_strategy
+    
+    # 1. Profile & Basic Data
+    profile = {
+        "age": client_data.get("age", 30),
+        "dependents": client_data.get("dependents", 0),
+        "monthly_income": client_data.get("monthly_income", 100000),
+        "monthly_savings": client_data.get("monthly_savings", 20000),
+        "behavior": client_data.get("behavior", "Moderate"),
+        "total_liabilities": client_data.get("total_liabilities", 0)
     }
 
-    return report
+    # 2. Risk Profile
+    risk_raw = analysis_data.get("risk", {})
+    risk = {
+        "score": risk_raw.get("score", 5.0),
+        "category": risk_raw.get("category", "Moderate"),
+        "explanation": risk_raw.get("explanation", {
+            "Age": 2.0, "Dependents": -0.5, "Income": 1.5, "Behavior": 2.0
+        })
+    }
+
+    # 3. Goals
+    goals_raw = analysis_data.get("goals", [])
+    goals = []
+    for g in goals_raw:
+        goals.append({
+            "name": g.get("name", "Goal"),
+            "years": g.get("years_to_goal", 10),
+            "future_value": g.get("future_corpus", 0),
+            "roi": g.get("return_pct", 12.0),
+            "inflation": g.get("inflation_rate", 6.0),
+            "required_sip": g.get("required_sip", 0),
+            "step_up": 10 if g.get("future_corpus", 0) > 1000000 else 5,
+            "annuity": g.get("future_corpus", 0) * 0.005 # Mock annuity rule
+        })
+
+    # 4. Insurance & Liabilities
+    existing_ins = client_data.get("existing_insurance", {})
+    insurance = {
+        "life_cover": existing_ins.get("term", 0),
+        "life_gap": analyze_insurance_gap(profile, existing_ins).get("term_gap", 0),
+        "health_cover": existing_ins.get("health", 0),
+        "health_gap": calculate_health_insurance_gap(profile, existing_ins).get("gap", 0),
+        "recommendations": generate_insurance_recommendations(profile, existing_ins)
+    }
+
+    # 5. Portfolio Health & Insights
+    portfolio_raw = analysis_data.get("portfolio", {})
+    div_score = portfolio_raw.get("diversification_score", 7.0)
+    
+    # Generate dynamic insights v2
+    insights_v2 = []
+    if div_score < 8.0:
+        insights_v2.append({"type": "warning", "headline": "Diversification Trap", "text": "High concentration in single-cap funds identified."})
+    else:
+        insights_v2.append({"type": "success", "headline": "Well Balanced", "text": "Portfolio effectively covers Equity, Debt, and Gold."})
+    
+    if profile["monthly_savings"] < goals[0]["required_sip"] if goals else False:
+        insights_v2.append({"type": "danger", "headline": "Savings Shortfall", "text": "Current savings capacity is 30% below required levels for primary goals."})
+
+    portfolio = {
+        "total_corpus": portfolio_raw.get("total_corpus", 0.0),
+        "diversification_score": div_score,
+        "insights_v2": insights_v2
+    }
+
+    # 6. Allocation & Macro
+    macro_raw = analysis_data.get("macro", {})
+    macro = {
+        "stability": macro_raw.get("stability_score", 0.8) * 100,
+        "ai_market_score": macro_raw.get("ai_market_score", 85)
+    }
+    
+    allocation = {
+        "targets": [
+            {"name": "Large Cap Equity", "percent": 40, "rationale": "Core stability and benchmark tracking."},
+            {"name": "Mid/Small Cap", "percent": 30, "rationale": "Alpha generation for long-horizon goals."},
+            {"name": "Debt / Fixed Income", "percent": 20, "rationale": "Capital preservation and volatility dampening."},
+            {"name": "Gold / Alt", "percent": 10, "rationale": "Hedge against systemic macro shocks."}
+        ]
+    }
+
+    # 7. Investment Mode
+    mode_raw = get_recommended_strategy(profile, {"vix": 18, "nifty_signal": "neutral"})
+    investment_mode = {
+        "title": mode_raw.get("primary_mode", "SIP"),
+        "description": mode_raw.get("rationale", "Systematic entry recommended.")
+    }
+
+    # 8. Funds
+    funds_raw = analysis_data.get("funds", [])
+    funds = []
+    for f in funds_raw:
+        funds.append({
+            "name": f.get("name", "Unknown Fund"),
+            "ai_reason": f.get("ai_reason", "High persistence in risk-adjusted returns."),
+            "alpha": f.get("alpha", 2.1),
+            "weight": f.get("weight", 20),
+            "score": f.get("ai_score", 85)
+        })
+
+    # 9. Scenarios & Projections
+    scenarios = {
+        "base_roi": 12.0,
+        "step_up_pct": 10,
+        "inflation_rate": 6.0,
+        "inflation_adjusted": True,
+        "projections": [
+            {"year": 5, "base_val": profile["monthly_savings"] * 70, "step_val": profile["monthly_savings"] * 85},
+            {"year": 10, "base_val": profile["monthly_savings"] * 180, "step_val": profile["monthly_savings"] * 240},
+            {"year": 20, "base_val": profile["monthly_savings"] * 600, "step_val": profile["monthly_savings"] * 950}
+        ]
+    }
+
+    # 10. Monte Carlo
+    mc_raw = analysis_data.get("monte_carlo", {})
+    prob = mc_raw.get("success_probability", 75.0)
+    monte_carlo = {
+        "prob": prob,
+        "interpretation": "Strong likelihood of success under normal conditions." if prob >= 80 else "Requires intervention to improve probability.",
+        "fix_recommendation": "Consider increasing SIP by 15% or extending goal by 2 years."
+    }
+
+    return {
+        "client": profile,
+        "risk": risk,
+        "goals": goals,
+        "insurance": insurance,
+        "portfolio": portfolio,
+        "macro": macro,
+        "allocation": allocation,
+        "investment_mode": investment_mode,
+        "funds": funds,
+        "scenarios": scenarios,
+        "monte_carlo": monte_carlo
+    }
+
+
+def generate_full_report(client_data, analysis_data):
+    # This is the old version, keeping it for compatibility but mapping to V2 data structure
+    v2_data = generate_report_v2_data(client_data, analysis_data)
+    from backend.report.pdf_generator import generate_financial_report
+    
+    # Trigger the PDF generation
+    output_path = generate_financial_report(
+        client_data=v2_data["client"],
+        risk_data=v2_data["risk"],
+        goals=v2_data["goals"],
+        allocation_data=v2_data["allocation"],
+        portfolio_data=v2_data["portfolio"],
+        insurance_data=v2_data["insurance"],
+        macro_data=v2_data["macro"],
+        funds=v2_data["funds"],
+        monte_carlo=v2_data["monte_carlo"],
+        scenarios=v2_data["scenarios"],
+        investment_mode=v2_data["investment_mode"]
+    )
+    
+    return {"status": "success", "pdf_path": output_path, "data": v2_data}

@@ -1,6 +1,5 @@
 import streamlit as st
 from backend.engines.risk_engine import compute_risk
-from backend.processors.explainability import explain_risk_full
 from backend.engines.goal_engine import (
     calculate_retirement_goal,
     calculate_child_education_goal,
@@ -10,13 +9,13 @@ from backend.engines.monte_carlo_engine import run_monte_carlo_simulation
 from backend.engines.portfolio_engine import analyze_portfolio
 from backend.engines.projection_engine import generate_projection_table
 from backend.engines.recommendation_engine import suggest_mutual_funds
-from backend.report.pdf_generator import generate_financial_report
-from frontend.components.risk_meter import render_risk_meter
+from backend.api.report_generator import generate_full_report
 from frontend.components.charts import (
     render_allocation_chart,
     render_projection_chart,
 )
 from frontend.components.sip_calculator_widget import render_sip_calculator_widget
+from frontend.components.score_intelligence_panel import render_score_intelligence_panel
 
 # ── New Intelligence Layers ───────────────────────────────────────────────────
 from backend.engines.intelligence.context_engine import get_macro_context
@@ -56,10 +55,163 @@ def render_dashboard(client_data: dict):
     user_inputs = {
         "age": client_data["age"],
         "dependents": client_data["dependents"],
-        "savings": client_data["monthly_savings"] / max(client_data["monthly_income"], 1) * 100,
+        # Use absolute monthly values; the risk model normalizes savings by income.
+        "income": client_data["monthly_income"],
+        "savings": client_data["monthly_savings"],
         "behavior": 2 if client_data["behavior"].lower() == "moderate" else (1 if client_data["behavior"].lower() == "conservative" else 3)
     }
     risk_profile = compute_risk(user_inputs, macro_context)
+
+    # Pre-compute values required for the always-visible Score Intelligence Panel.
+    # Important: the panel component itself does not re-compute; it only renders these precomputed values.
+    portfolio_analysis = analyze_portfolio(
+        existing_fd=client_data["existing_fd"],
+        existing_savings=client_data["existing_savings"],
+        existing_gold=client_data["existing_gold"],
+        existing_mutual_funds=client_data["existing_mutual_funds"],
+        risk_score=risk_profile["score"],
+        monthly_income=client_data.get("monthly_income", 0.0),
+    )
+
+    allocation = get_asset_allocation(risk_profile["score"])
+
+    # Fetch recommendations first so AI layer can score them
+    recommended_funds_base, is_live_data = suggest_mutual_funds(
+        allocation["allocation"], risk_profile["category"]
+    )
+    ai_intel = get_live_intelligence(
+        base_allocation=allocation["allocation"],
+        recommended_funds=recommended_funds_base,
+        risk_category=risk_profile["category"],
+        use_cache=True,
+    )
+    signals = ai_intel.get("signals", {})
+    narratives = ai_intel.get("narratives", {})
+    ranked_funds = ai_intel.get("ranked_funds", recommended_funds_base)
+    data_src = ai_intel.get("data_source", "fallback")
+    last_upd = ai_intel.get("last_updated", "unknown")
+
+    # Goal Confidence Band: only available if a retirement goal is set.
+    ret_result = None
+    probability = None
+    ret_expense = None
+    try:
+        goals = client_data.get("goals", {})
+        ret_data = goals.get("retirement")
+        if ret_data:
+            ret_expense = ret_data.get("expense")
+            ret_result = calculate_retirement_goal(
+                current_age=client_data["age"],
+                current_monthly_expense=ret_expense,
+                expected_return_rate=0.13,
+                retirement_age=client_data["target_retirement_age"],
+                existing_corpus=client_data["existing_corpus"],
+            )
+            probability = run_monte_carlo_simulation(
+                initial_corpus=client_data["existing_corpus"],
+                monthly_sip=client_data["monthly_savings"],
+                years=ret_result["years_to_goal"],
+                target_corpus=ret_result["future_corpus"],
+                expected_annual_return=0.13,
+                annual_volatility=0.15,
+            )
+    except Exception:
+        ret_result = None
+        probability = None
+        ret_expense = None
+
+    # Monte Carlo fix recommendation block (Phase 6.1).
+    # When success probability is very low, we must show an actionable next step
+    # instead of letting the user only see the raw probability number.
+    goal_fix_recommendation = None
+    if ret_result is not None and probability is not None and probability < 50.0:
+        from backend.utils.sip_calculator import calculate_sip_future_value
+
+        current_sip = float(client_data["monthly_savings"])
+        required_sip = float(ret_result.get("required_sip", 0.0))
+        required_corpus = float(ret_result.get("future_corpus", 0.0))
+        years = int(ret_result.get("years_to_goal", 0))
+
+        pct = (current_sip / required_sip) if required_sip > 0 else 0.0
+        gap_sip = max(0.0, required_sip - current_sip)
+
+        # Option 1: Increase SIP to cover the SIP gap
+        option_1 = (
+            f"Increase monthly savings by ₹{gap_sip:,.0f} "
+            f"to meet the ₹{required_corpus:,.0f} corpus target."
+        )
+
+        # Option 2: Extend retirement age until required SIP fits capacity
+        extra_years = 0
+        adjusted_sip = required_sip
+        if ret_expense is not None:
+            base_ret_age = int(client_data["target_retirement_age"])
+            # Try up to 5 extra years to avoid excessive computation.
+            for k in range(1, 6):
+                new_ret_age = base_ret_age + k
+                new_ret = calculate_retirement_goal(
+                    current_age=client_data["age"],
+                    current_monthly_expense=ret_expense,
+                    expected_return_rate=0.13,
+                    retirement_age=new_ret_age,
+                    existing_corpus=client_data["existing_corpus"],
+                )
+                new_required_sip = float(new_ret.get("required_sip", required_sip))
+                if new_required_sip <= current_sip:
+                    extra_years = k
+                    adjusted_sip = new_required_sip
+                    break
+                adjusted_sip = new_required_sip
+            if extra_years == 0:
+                # If we didn't find a fit, still propose the 5-year extension.
+                extra_years = 5
+                adjusted_sip = adjusted_sip
+
+        option_2 = (
+            f"Extend retirement age by {extra_years} years — "
+            f"required SIP drops to ₹{adjusted_sip:,.0f}/month."
+        )
+
+        # Option 3: Reduce target corpus to what current SIP can achieve (Monte Carlo re-check)
+        existing_corpus = float(client_data["existing_corpus"])
+        expected_annual_return = 0.13
+        annual_volatility = 0.15
+
+        # Achievable corpus at horizon using current SIP for the "shortfall" portion.
+        fv_existing = existing_corpus * ((1 + expected_annual_return) ** years)
+        fv_shortfall_sip = calculate_sip_future_value(
+            current_sip, expected_annual_return, years
+        )
+        achievable_corpus = fv_existing + fv_shortfall_sip
+
+        new_probability = run_monte_carlo_simulation(
+            initial_corpus=existing_corpus,
+            monthly_sip=current_sip,
+            years=years,
+            target_corpus=achievable_corpus,
+            expected_annual_return=expected_annual_return,
+            annual_volatility=annual_volatility,
+        )
+
+        option_3 = (
+            f"Reduce retirement corpus target to ₹{achievable_corpus:,.0f} "
+            f"(achievable at ₹{current_sip:,.0f}/month SIP = {new_probability:.0f}% confidence)."
+        )
+
+        recommended = "option_2"
+        gap_analysis = (
+            f"Your current SIP capacity (₹{current_sip:,.0f}) covers "
+            f"{pct:.0%} of the required SIP (₹{required_sip:,.0f}). "
+            f"Gap: ₹{gap_sip:,.0f}/month."
+        )
+
+        goal_fix_recommendation = {
+            "gap_analysis": gap_analysis,
+            "option_1": option_1,
+            "option_2": option_2,
+            "option_3": option_3,
+            "recommended": recommended,
+        }
 
     st.markdown("---")
     st.subheader("Risk Profile Analysis")
@@ -70,7 +222,21 @@ def render_dashboard(client_data: dict):
         st.metric("Risk Score", f"{risk_profile['score']} / 10")
 
     with colB:
-        render_risk_meter(risk_profile["score"])
+        # Full risk card: gauge + band thresholds + factor contribution breakdown.
+        from frontend.components.risk_meter import render_risk_score_card
+        render_risk_score_card(risk_profile)
+
+    # Always-visible Score Intelligence Panel (5 scores; no extra recompute in panel)
+    render_score_intelligence_panel(
+        client_data=client_data,
+        risk_profile=risk_profile,
+        diversification=portfolio_analysis,
+        macro_context=macro_context,
+        ai_recommended_funds=ranked_funds,
+        goal_confidence_probability=probability,
+        goal_fix_recommendation=goal_fix_recommendation,
+        goal_last_updated=last_upd,
+    )
 
     # ── NEW: Risk Explainability ──────────────────────────────────────────────
     risk_xai = explain_risk_profile(risk_profile, client_data)
@@ -81,11 +247,16 @@ def render_dashboard(client_data: dict):
             st.markdown(f"- {factor}")
         st.info(f"**Recommendation:** {risk_xai['recommendation']}")
 
-        risk_explanation = explain_risk_full(risk_profile)
-        st.markdown("### 📊 Risk Breakdown")
-        st.json(risk_explanation["factor_breakdown"])
-        st.markdown("### ⚙️ Calculation Formula")
-        st.json(risk_explanation["formula"])
+        st.markdown("### 📊 Risk Factor Drivers (plain English)")
+        for f in risk_profile.get("factors", []):
+            st.markdown(
+                f"- **{f.get('name', 'Factor')}**: {f.get('rationale', '')} "
+                f"(contribution: {float(f.get('contribution', 0.0)):.2f} points)"
+            )
+        st.markdown(
+            f"**Methodology note:** {risk_profile.get('methodology_note', '-')}"
+        )
+        st.markdown(f"**Allocation mapping:** {risk_profile.get('allocation_mapping', '-')}")
 
     # ── NEW: Macro Environment Card ────────────────────────────────────────────
     macro_fmt = format_macro_summary(macro_context)
@@ -110,29 +281,14 @@ def render_dashboard(client_data: dict):
     st.markdown("---")
     st.subheader("Existing Portfolio Health")
 
-    portfolio_analysis = analyze_portfolio(
-        existing_fd=client_data["existing_fd"],
-        existing_savings=client_data["existing_savings"],
-        existing_gold=client_data["existing_gold"],
-        existing_mutual_funds=client_data["existing_mutual_funds"],
-        risk_score=risk_profile["score"],
-        monthly_income=client_data.get("monthly_income", 0.0),
-    )
-
     col_p1, col_p2 = st.columns([1, 2])
     with col_p1:
         st.metric(
             "Total Existing Corpus",
             f"₹{portfolio_analysis.get('total_corpus', 0.0):,.0f}",
         )
-        st.metric(
-            "Diversification Score",
-            f"{portfolio_analysis['diversification_score']} / 10",
-        )
-        st.metric(
-            "Risk Exposure",
-            portfolio_analysis.get("risk_exposure", "N/A (Update Profile)"),
-        )
+        st.markdown(f"**Diversification Score:** {portfolio_analysis['diversification_score']} / 10")
+        st.markdown(f"**Risk Exposure:** {portfolio_analysis.get('risk_exposure', 'N/A')}")
 
     with col_p2:
         # ── NEW: Portfolio Explainability ─────────────────────────────────────
@@ -144,7 +300,6 @@ def render_dashboard(client_data: dict):
             st.info(insight)
 
     # Asset Allocation
-    allocation = get_asset_allocation(risk_profile["score"])
     st.markdown("---")
     st.subheader("Quantum Asset Allocation")
     render_allocation_chart(allocation["allocation"])
@@ -152,24 +307,6 @@ def render_dashboard(client_data: dict):
     # ── NEW: Real-Time AI Intelligence Panel ─────────────────────────────────
     st.markdown("---")
     st.subheader("Live Intelligence Panel")
-
-    # Fetch recommendations first so AI layer can score them
-    recommended_funds_base, is_live_data = suggest_mutual_funds(
-        allocation["allocation"], risk_profile["category"]
-    )
-
-    # Invoke the AI layer (uses background cache — no blocking)
-    ai_intel = get_live_intelligence(
-        base_allocation=allocation["allocation"],
-        recommended_funds=recommended_funds_base,
-        risk_category=risk_profile["category"],
-        use_cache=True,
-    )
-    signals = ai_intel.get("signals", {})
-    narratives = ai_intel.get("narratives", {})
-    ranked_funds = ai_intel.get("ranked_funds", recommended_funds_base)
-    data_src = ai_intel.get("data_source", "fallback")
-    last_upd = ai_intel.get("last_updated", "unknown")
 
     # Data freshness badge
     src_badge = {
@@ -308,19 +445,16 @@ def render_dashboard(client_data: dict):
     st.subheader("Financial Goals Analysis")
     col1, col2 = st.columns(2)
 
-    ret_data = client_data["goals"]["retirement"]
-    ret_result = calculate_retirement_goal(
-        current_age=client_data["age"],
-        current_monthly_expense=ret_data["expense"],
-        expected_return_rate=0.13,
-        retirement_age=client_data["target_retirement_age"],
-        existing_corpus=client_data["existing_corpus"],
-    )
-
     with col1:
-        st.markdown(f"#### Retirement ({ret_result['years_to_goal']} Yrs)")
-        st.metric("Required Future Corpus", f"₹{ret_result['future_corpus']:,.0f}")
-        st.metric("Required Monthly SIP", f"₹{ret_result['required_sip']:,.0f}")
+        if ret_result is None:
+            st.markdown("#### Retirement (Goal not set)")
+            st.info("Set a retirement goal to see required corpus and SIP.")
+        else:
+            st.markdown(f"#### Retirement ({ret_result['years_to_goal']} Yrs)")
+            st.metric(
+                "Required Future Corpus", f"₹{ret_result['future_corpus']:,.0f}"
+            )
+            st.metric("Required Monthly SIP", f"₹{ret_result['required_sip']:,.0f}")
 
     edu_data = client_data["goals"]["education"]
     edu_result = calculate_child_education_goal(
@@ -332,107 +466,190 @@ def render_dashboard(client_data: dict):
         st.metric("Required Future Corpus", f"₹{edu_result['future_corpus']:,.0f}")
         st.metric("Required Monthly SIP", f"₹{edu_result['required_sip']:,.0f}")
 
-    # Projection Chart
-    st.markdown("---")
-    st.subheader("Wealth Projection Timeline")
-    render_projection_chart(
-        client_data["existing_corpus"],
-        client_data["monthly_savings"],
-        0.13,
-        ret_result["years_to_goal"],
-    )
-
-    # Monte Carlo Simulation
-    st.markdown("---")
-    st.subheader("Monte Carlo Simulation")
-    st.caption(
-        "Testing 1,000 market scenarios to predict Retirement success probability."
-    )
-
-    probability = run_monte_carlo_simulation(
-        initial_corpus=client_data["existing_corpus"],
-        monthly_sip=client_data["monthly_savings"],
-        years=ret_result["years_to_goal"],
-        target_corpus=ret_result["future_corpus"],
-        expected_annual_return=0.13,
-        annual_volatility=0.15,
-    )
-
-    # ── NEW: Confidence Band Badge ─────────────────────────────────────────────
-    mc_fmt = format_monte_carlo_summary(probability, macro_context)
-    band = get_confidence_band(probability / 100.0)
-    conf_adj = macro_context.get("adjusted_confidence", 0.85)
-    band_adj = get_confidence_band(conf_adj)
-    cb_col1, cb_col2 = st.columns(2)
-    cb_col1.metric(
-        "Goal Confidence Band",
-        f"{band['icon']} {band['label']} ({probability:.0f}%)",
-        help="High = 80-100%, Medium = 50-80%, Low = <50%",
-    )
-    cb_col2.metric(
-        "Macro-Adjusted Confidence",
-        f"{band_adj['icon']} {band_adj['label']} ({conf_adj:.0%})",
-        help="Confidence adjusted for current inflation, geopolitical risk, and market volatility.",
-    )
-
-    st.progress(probability / 100.0)
-    st.caption(mc_fmt["simple"])
-
-    if probability > 80:
-        st.success(
-            f"**{probability}%** probability of achieving your corpus! "
-            "You are on a highly secure path."
-        )
-    elif probability > 50:
-        st.warning(
-            f"**{probability}%** probability of achieving your corpus. "
-            "Consider increasing your SIP for more certainty."
-        )
+    # Projection + confidence sections are only available if the retirement goal was set.
+    if ret_result is None or probability is None:
+        st.markdown("---")
+        st.info("Set a retirement goal to see wealth projections, confidence, and scenario tables.")
     else:
-        st.error(
-            f"**{probability}%** probability of achieving your corpus. "
-            "A strategy adjustment is highly recommended."
+        # Projection Chart
+        st.markdown("---")
+        st.subheader("Wealth Projection Timeline")
+        render_projection_chart(
+            client_data["existing_corpus"],
+            client_data["monthly_savings"],
+            0.13,
+            ret_result["years_to_goal"],
         )
 
-    # ── NEW: Scenario Projections Table ───────────────────────────────────────
-    st.markdown("---")
-    st.subheader("Investment Scenarios")
-    st.caption(
-        "How your wealth could grow under different market conditions over your investment horizon."
-    )
-    scenarios = build_scenario_projections(
-        existing_corpus=client_data["existing_corpus"],
-        monthly_sip=client_data["monthly_savings"],
-        years=ret_result["years_to_goal"],
-    )
-    sc_cols = st.columns(3)
-    for i, sc in enumerate(scenarios):
-        with sc_cols[i]:
-            st.metric(
-                f"{sc['scenario']}",
-                f"₹{sc['final_corpus']:,.0f}",
-                f"at {sc['annual_return']} p.a.",
+        # Monte Carlo Simulation
+        st.markdown("---")
+        st.subheader("Monte Carlo Simulation")
+        st.caption(
+            "Testing 1,000 market scenarios to predict Retirement success probability."
+        )
+
+        # ── NEW: Confidence Band Badge ─────────────────────────────────────────────
+        mc_fmt = format_monte_carlo_summary(probability, macro_context)
+        band = get_confidence_band(probability / 100.0)
+        conf_adj = macro_context.get("adjusted_confidence", 0.85)
+        band_adj = get_confidence_band(conf_adj)
+        cb_col1, cb_col2 = st.columns(2)
+        cb_col1.metric(
+            "Goal Confidence Band",
+            (f"{band['icon']} {band['label']} (<50%)")
+            if goal_fix_recommendation
+            else f"{band['icon']} {band['label']} ({probability:.0f}%)",
+            help="High = 80-100%, Medium = 50-80%, Low = <50%",
+        )
+        cb_col2.metric(
+            "Macro-Adjusted Confidence",
+            f"{band_adj['icon']} {band_adj['label']} ({conf_adj:.0%})",
+            help="Confidence adjusted for current inflation, geopolitical risk, and market volatility.",
+        )
+
+        # Phase 6.1: fix recommendation block for very low confidence.
+        if goal_fix_recommendation:
+            st.error("❌ Low Goal Confidence: actionable fix recommendations")
+            st.markdown(goal_fix_recommendation.get("gap_analysis", ""))
+            st.markdown(f"**Recommended:** {goal_fix_recommendation.get('recommended', '')}")
+            st.markdown(f"**Option 1:** {goal_fix_recommendation.get('option_1', '')}")
+            st.markdown(f"**Option 2:** {goal_fix_recommendation.get('option_2', '')}")
+            st.markdown(f"**Option 3:** {goal_fix_recommendation.get('option_3', '')}")
+
+        st.progress(probability / 100.0)
+        st.caption(mc_fmt["simple"])
+
+        # Phase 6.1: sensitivity analysis (only when confidence is low).
+        if goal_fix_recommendation:
+            try:
+                import numpy as np
+                import plotly.graph_objects as go
+
+                current_sip = float(client_data["monthly_savings"])
+                required_sip = float(ret_result.get("required_sip", 0.0))
+                years = int(ret_result.get("years_to_goal", 0))
+                target_corpus = float(ret_result.get("future_corpus", 0.0))
+                initial_corpus = float(client_data["existing_corpus"])
+
+                if current_sip > 0 and required_sip > 0 and years > 0 and target_corpus > 0:
+                    max_sip = min(2.0 * required_sip, 2.0 * current_sip)
+                    sips = np.linspace(current_sip, max_sip, 10)
+                    probs = [
+                        run_monte_carlo_simulation(
+                            initial_corpus=initial_corpus,
+                            monthly_sip=float(sip),
+                            years=years,
+                            target_corpus=target_corpus,
+                            expected_annual_return=0.13,
+                            annual_volatility=0.15,
+                        )
+                        for sip in sips
+                    ]
+
+                    fig = go.Figure()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=sips,
+                            y=probs,
+                            mode="lines+markers",
+                            name="Success Probability",
+                        )
+                    )
+
+                    # 80% threshold highlight
+                    fig.add_shape(
+                        type="line",
+                        x0=min(sips),
+                        x1=max(sips),
+                        y0=80,
+                        y1=80,
+                        line=dict(color="red", width=2, dash="dash"),
+                    )
+
+                    # Mark current position
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[current_sip],
+                            y=[run_monte_carlo_simulation(
+                                initial_corpus=initial_corpus,
+                                monthly_sip=current_sip,
+                                years=years,
+                                target_corpus=target_corpus,
+                                expected_annual_return=0.13,
+                                annual_volatility=0.15,
+                            )],
+                            mode="markers",
+                            marker=dict(color="green", size=10),
+                            name="Current SIP",
+                        )
+                    )
+
+                    fig.update_layout(
+                        title="Sensitivity Analysis: SIP Amount vs Success Probability",
+                        xaxis_title="Monthly SIP Amount (INR)",
+                        yaxis_title="Success Probability (%)",
+                        template="plotly_dark",
+                        height=320,
+                    )
+                    st.plotly_chart(fig, width="stretch")
+            except Exception:
+                st.caption("Sensitivity analysis unavailable.")
+
+        if probability > 80:
+            st.success(
+                f"**{probability}%** probability of achieving your corpus! "
+                "You are on a highly secure path."
+            )
+        elif probability > 50:
+            st.warning(
+                f"**{probability}%** probability of achieving your corpus. "
+                "Consider increasing your SIP for more certainty."
+            )
+        else:
+            st.error(
+                f"**{probability}%** probability of achieving your corpus. "
+                "A strategy adjustment is highly recommended."
             )
 
-    # ── NEW: AI Insight Cards ──────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("AI Insight Cards")
-    insight_cards = build_insight_cards(
-        risk_data=risk_profile,
-        probability=probability,
-        portfolio_data=portfolio_analysis,
-        macro_context=macro_context,
-    )
-    card_cols = st.columns(3)
-    colour_map = {"green": "[OK]", "yellow": "[!]", "red": "[!!]"}
-    for i, card in enumerate(insight_cards):
-        with card_cols[i]:
-            icon_prefix = colour_map.get(card["colour"], "")
-            st.metric(
-                label=f"{card['title']}",
-                value=card["value"],
-            )
-            st.caption(f"{icon_prefix} {card['recommendation']}")
+        # ── NEW: Scenario Projections Table ───────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Investment Scenarios")
+        st.caption(
+            "How your wealth could grow under different market conditions over your investment horizon."
+        )
+        scenarios = build_scenario_projections(
+            existing_corpus=client_data["existing_corpus"],
+            monthly_sip=client_data["monthly_savings"],
+            years=ret_result["years_to_goal"],
+        )
+        sc_cols = st.columns(3)
+        for i, sc in enumerate(scenarios):
+            with sc_cols[i]:
+                st.metric(
+                    f"{sc['scenario']}",
+                    f"₹{sc['final_corpus']:,.0f}",
+                    f"at {sc['annual_return']} p.a.",
+                )
+
+        # ── NEW: AI Insight Cards ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("AI Insight Cards")
+        insight_cards = build_insight_cards(
+            risk_data=risk_profile,
+            probability=probability,
+            portfolio_data=portfolio_analysis,
+            macro_context=macro_context,
+        )
+        card_cols = st.columns(3)
+        colour_map = {"green": "[OK]", "yellow": "[!]", "red": "[!!]"}
+        for i, card in enumerate(insight_cards):
+            with card_cols[i]:
+                icon_prefix = colour_map.get(card["colour"], "")
+                st.metric(
+                    label=f"{card['title']}",
+                    value=card["value"],
+                )
+                st.caption(f"{icon_prefix} {card['recommendation']}")
 
     # SIP Calculator Widget
     st.markdown("---")
@@ -445,52 +662,52 @@ def render_dashboard(client_data: dict):
 
     if st.button("Generate Detailed PDF Report"):
         with st.spinner("Generating proposal..."):
-            # Module 5: Prepare SIP Projections (5, 10, 20 Years) at 12%
-            sip_amount = client_data["monthly_savings"]
-            initial = client_data["existing_corpus"]
+            if ret_result is None or probability is None:
+                st.info("Set a retirement goal to generate the PDF proposal.")
+            else:
+                # Module 5: Prepare SIP Projections (5, 10, 20 Years) at 12%
+                sip_amount = client_data["monthly_savings"]
+                initial = client_data["existing_corpus"]
 
-            sip_projections = {}
-            for y in [5, 10, 20]:
-                df = generate_projection_table(initial, sip_amount, 0.12, y)
-                sip_projections[f"{y} Years"] = df.iloc[-1]["total_value"]
+                sip_projections = {}
+                for y in [5, 10, 20]:
+                    df = generate_projection_table(initial, sip_amount, 0.12, y)
+                    sip_projections[f"{y} Years"] = df.iloc[-1]["total_value"]
 
-            # Module 5: Prepare Expected Returns Scenarios
-            # Using the retirement timeframe for this module's requirement
-            years = ret_result["years_to_goal"]
-            expected_returns = {
-                "Conservative (8%)": generate_projection_table(
-                    initial, sip_amount, 0.08, years
-                ).iloc[-1]["total_value"],
-                "Moderate (12%)": generate_projection_table(
-                    initial, sip_amount, 0.12, years
-                ).iloc[-1]["total_value"],
-                "Aggressive (15%)": generate_projection_table(
-                    initial, sip_amount, 0.15, years
-                ).iloc[-1]["total_value"],
-            }
+                # Module 5: Prepare Expected Returns Scenarios
+                # Using the retirement timeframe for this module's requirement
+                years = ret_result["years_to_goal"]
+                expected_returns = {
+                    "Conservative (8%)": generate_projection_table(
+                        initial, sip_amount, 0.08, years
+                    ).iloc[-1]["total_value"],
+                    "Moderate (12%)": generate_projection_table(
+                        initial, sip_amount, 0.12, years
+                    ).iloc[-1]["total_value"],
+                    "Aggressive (15%)": generate_projection_table(
+                        initial, sip_amount, 0.15, years
+                    ).iloc[-1]["total_value"],
+                }
 
-            pdf_path = generate_financial_report(
-                client_data=client_data,
-                risk_data=risk_profile,
-                retirement_data=ret_result,
-                education_data=edu_result,
-                allocation_data=allocation,
-                portfolio_data=portfolio_analysis,
-                recommended_funds=recommended_funds,
-                monte_carlo_prob=probability,
-                sip_projections=sip_projections,
-                expected_returns=expected_returns,
-                ai_intel=ai_intel,
-                macro_context=macro_context,
-            )
-            with open(pdf_path, "rb") as pdf_file:
-                pdf_bytes = pdf_file.read()
-                st.download_button(
-                    label="Download Investment Proposal (PDF)",
-                    data=pdf_bytes,
-                    file_name="Investment_Proposal.pdf",
-                    mime="application/pdf",
-                )
+                analysis_results = {
+                    "risk": risk_profile,
+                    "goals": [ret_result, edu_result],
+                    "portfolio": portfolio_analysis,
+                    "macro": macro_context,
+                    "funds": recommended_funds,
+                    "monte_carlo": {"success_probability": probability}
+                }
+
+                report_result = generate_full_report(client_data, analysis_results)
+                pdf_path = report_result["pdf_path"]
+                with open(pdf_path, "rb") as pdf_file:
+                    pdf_bytes = pdf_file.read()
+                    st.download_button(
+                        label="Download Investment Proposal (PDF)",
+                        data=pdf_bytes,
+                        file_name="Investment_Proposal.pdf",
+                        mime="application/pdf",
+                    )
 
     # --- Insurance Gap Analysis & Advisor Overrides (non-blocking) ---
     try:
