@@ -1,53 +1,79 @@
 import os
+from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
+from backend.report.charts import (
+    generate_risk_factor_chart,
+    generate_sensitivity_chart,
+    generate_score_gauges
+)
+from backend.engines.explanation_standards import _STANDARDS
 
 def generate_financial_report(
     client_data: dict,
     risk_data: dict,
-    retirement_data: dict,
-    education_data: dict,
+    goals: list,
     allocation_data: dict,
     portfolio_data: dict,
-    recommended_funds: list,
-    monte_carlo_prob: float,
-    sip_projections: dict = None,
-    expected_returns: dict = None,
-    ai_intel: dict = None,
-    macro_context: dict = None,
-    output_path: str = "report.pdf",
+    insurance_data: dict,
+    macro_data: dict,
+    funds: list,
+    monte_carlo: dict,
+    scenarios: dict,
+    investment_mode: dict,
+    output_path: str = "report_v2.pdf",
 ):
     """
-    Generates a PDF report using Jinja2 and WeasyPrint.
+    Generates a professional PDF report with 13 key sections and embedded AI insights.
     """
     current_dir = os.path.dirname(os.path.abspath(__file__))
     env = Environment(loader=FileSystemLoader(current_dir))
     template = env.get_template("template.html")
 
-    # Load disclaimer
+    # 1. Generate Charts
+    charts = {
+        "risk_factors": generate_risk_factor_chart(risk_data.get("explanation", {})),
+        "sensitivity": generate_sensitivity_chart(monte_carlo.get("prob", 0)),
+        "score_dashboard": generate_score_gauges({
+            "Risk": risk_data.get("score", 0),
+            "Diversification": portfolio_data.get("diversification_score", 0),
+            "AI Market": macro_data.get("ai_market_score", 85),
+            "Market Stability": macro_data.get("stability", 80),
+            "Goal Confidence": monte_carlo.get("prob", 0)
+        })
+    }
+
+    # 2. Prepare Standards Appendix
+    standards_list = list(_STANDARDS.values())
+
+    # 3. Load disclaimer
     disclaimer_path = os.path.join(current_dir, "..", "..", "DISCLAIMER.txt")
     try:
-        with open(disclaimer_path, "r") as f:
+        with open(disclaimer_path, "r", encoding="utf-8") as f:
             disclaimer_text = f.read()
     except FileNotFoundError:
-        disclaimer_text = "Market performance is not guaranteed."
+        disclaimer_text = "Market performance is not guaranteed. Please consult a qualified advisor."
 
+    # 4. Render HTML
     html_out = template.render(
+        today=datetime.now().strftime("%d %b %Y"),
         client=client_data,
         risk=risk_data,
-        retirement=retirement_data,
-        education=education_data,
+        goals=goals,
         allocation=allocation_data,
         portfolio=portfolio_data,
-        funds=recommended_funds,
-        monte_carlo_prob=monte_carlo_prob,
-        sip_projections=sip_projections or {},
-        expected_returns=expected_returns or {},
-        ai_intel=ai_intel or {},
-        macro_context=macro_context or {},
+        insurance=insurance_data,
+        macro=macro_data,
+        funds=funds,
+        monte_carlo=monte_carlo,
+        scenarios=scenarios,
+        investment_mode=investment_mode,
+        charts=charts,
+        standards=standards_list,
         disclaimer=disclaimer_text,
     )
 
+    # 5. Generate PDF
     HTML(string=html_out).write_pdf(output_path)
     return output_path

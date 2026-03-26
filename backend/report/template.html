@@ -6,9 +6,9 @@
     <title>Financial Action Plan</title>
     <style>
         body {
-            font-family: 'Helvetica', sans-serif;
+            font-family: 'Helvetica', 'Arial', sans-serif;
             color: #333;
-            line-height: 1.6;
+            line-height: 1.5;
             padding: 20px;
         }
 
@@ -17,23 +17,33 @@
             text-align: center;
             border-bottom: 2px solid #0d47a1;
             padding-bottom: 10px;
+            margin-bottom: 20px;
         }
 
         h2 {
             color: #1565c0;
             border-bottom: 1px solid #ccc;
             padding-bottom: 5px;
-            margin-top: 30px;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+
+        h3 {
+            color: #1a237e;
+            margin-top: 15px;
+            font-size: 1.2em;
         }
 
         .section {
-            margin-bottom: 20px;
+            margin-bottom: 25px;
+            page-break-inside: avoid;
         }
 
         .data-table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 10px;
+            margin-bottom: 5px;
         }
 
         .data-table th,
@@ -41,264 +51,357 @@
             border: 1px solid #ddd;
             padding: 8px;
             text-align: left;
+            font-size: 12px;
         }
 
         .data-table th {
             background-color: #f5f5f5;
             font-weight: bold;
+            color: #333;
+        }
+
+        .source-footnote {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 15px;
+            font-style: italic;
+        }
+
+        .insight-card {
+            border-left: 5px solid #ccc;
+            background: #f9f9f9;
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+
+        .insight-card.success { border-left-color: #4caf50; background-color: #f1f8e9; }
+        .insight-card.warning { border-left-color: #ff9800; background-color: #fff3e0; }
+        .insight-card.danger { border-left-color: #f44336; background-color: #ffebee; }
+
+        .dashboard-row {
+            display: flex;
+            justify-content: space-between;
+            text-align: center;
+            margin-bottom: 20px;
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .dashboard-item {
+            flex: 1;
+        }
+
+        .dashboard-score {
+            font-size: 18px;
+            font-weight: bold;
+            display: block;
+        }
+
+        .dashboard-label {
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .gauge-img {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            display: block;
+        }
+
+        .chart-img {
+            max-width: 100%;
+            margin-top: 10px;
+        }
+
+        .appendix-page {
+            page-break-before: always;
         }
 
         .disclaimer {
             font-size: 10px;
             color: #777;
-            margin-top: 50px;
+            margin-top: 40px;
             text-align: justify;
             border-top: 1px solid #ddd;
             padding-top: 10px;
         }
+
+        .assumptions-panel {
+            background: #eef2f7;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 11px;
+        }
+
+        .status-icon {
+            font-size: 14px;
+        }
+
     </style>
 </head>
 
 <body>
 
-    <h1>Financial Intelligence Report</h1>
+    <h1>Financial Intelligence Report - 2026</h1>
 
+    <!-- 1. EXECUTIVE SUMMARY -->
     <div class="section">
         <h2>1. Executive Summary</h2>
-        <p>This report provides a comprehensive goal-oriented financial plan based on your current profile, savings
-            capacity, and risk appetite.</p>
+        <p>This comprehensive financial plan is designed to provide institutional-grade intelligence for your personal
+            wealth journey. By integrating AI-driven fund selection, macro-economic context, and probabilistic goal
+            simulations, we aim to ensure your capital is deployed with maximum efficiency and safety.</p>
+
+        <!-- Visual Score Dashboard -->
+        <div class="dashboard-row">
+            <img src="{{ charts.score_dashboard }}" class="gauge-img" alt="Score Dashboard">
+        </div>
     </div>
 
+    <!-- 2. CLIENT PROFILE -->
     <div class="section">
         <h2>2. Client Profile</h2>
         <table class="data-table">
             <tr>
-                <th>Age</th>
-                <td>{{ client.age }}</td>
+                <th width="30%">Attribute</th>
+                <th>Value</th>
+            </tr>
+            <tr><td>Age</td><td>{{ client.age }} Years</td></tr>
+            <tr><td>Dependents</td><td>{{ client.dependents }}</td></tr>
+            <tr><td>Monthly Income</td><td>₹{{ "{:,.0f}".format(client.monthly_income) }}</td></tr>
+            <tr><td>Savings Capacity</td><td>₹{{ "{:,.0f}".format(client.monthly_savings) }} / month</td></tr>
+            <tr><td>Behavioral Profile</td><td>{{ client.behavior }}</td></tr>
+        </table>
+
+        <h3>Insurance & Liability Overview</h3>
+        <table class="data-table">
+            <tr>
+                <th width="30%">Protection Type</th>
+                <th>Current Coverage</th>
+                <th>Status</th>
             </tr>
             <tr>
-                <th>Dependents</th>
-                <td>{{ client.dependents }}</td>
+                <td>Life Insurance</td>
+                <td>₹{{ "{:,.0f}".format(insurance.get('life_cover', 0)) }}</td>
+                <td>{{ "✅ Adequate" if insurance.get('life_gap', 0) <= 0 else "❌ Gap: ₹{:,.0f}".format(insurance.get('life_gap', 0)) }}</td>
             </tr>
             <tr>
-                <th>Monthly Income</th>
-                <td>₹{{ "{:,.2f}".format(client.monthly_income) }}</td>
+                <td>Health Insurance</td>
+                <td>₹{{ "{:,.0f}".format(insurance.get('health_cover', 0)) }}</td>
+                <td>{{ "✅ Adequate" if not insurance.get('health_gap') else "⚠️ Upgrade Recommended" }}</td>
             </tr>
             <tr>
-                <th>Monthly Savings Capacity</th>
-                <td>₹{{ "{:,.2f}".format(client.monthly_savings) }}</td>
-            </tr>
-            <tr>
-                <th>Behavioral Trait</th>
-                <td>{{ client.behavior }}</td>
+                <td>Total Liabilities</td>
+                <td>₹{{ "{:,.0f}".format(client.get('total_liabilities', 0)) }}</td>
+                <td>--</td>
             </tr>
         </table>
+        <div class="source-footnote">Source: Client declaration and Insurance Gap Analysis Engine.</div>
     </div>
 
+    <!-- 3. RISK SCORE EXPLANATION -->
     <div class="section">
         <h2>3. Risk Score Explanation</h2>
-        <p><strong>Score:</strong> {{ risk.score }} / 10 &nbsp;&nbsp;|&nbsp;&nbsp; <strong>Category:</strong> {{
-            risk.category }}</p>
-        <table class="data-table">
-            <tr>
-                <th>Factor</th>
-                <th>Contribution to Score</th>
-            </tr>
-            <tr>
-                <td>Age</td>
-                <td>{{ risk.explanation.age_contribution }}</td>
-            </tr>
-            <tr>
-                <td>Dependents</td>
-                <td>{{ risk.explanation.dependents_contribution }}</td>
-            </tr>
-            <tr>
-                <td>Income Stability</td>
-                <td>{{ risk.explanation.income_stability_contribution }}</td>
-            </tr>
-            <tr>
-                <td>Behavioral Stability</td>
-                <td>{{ risk.explanation.behavioral_contribution }}</td>
-            </tr>
-        </table>
-    </div>
+        <p>Your calculated Risk Score is <strong>{{ risk.score }} / 10</strong>, placing you in the
+            <strong>{{ risk.category }}</strong> category.</p>
+        
+        <div style="text-align: center;">
+            <img src="{{ charts.risk_factors }}" class="chart-img" alt="Risk Factors">
+        </div>
 
-    <div class="section">
-        <h2>4. Macro Environment Analysis</h2>
-        {% if macro_context %}
-        <table class="data-table">
-            <tr>
-                <th>Macro Stability Score</th>
-                <td>{{ "{:.0%}".format(macro_context.get('macro_context_score', 1.0)) }}</td>
-            </tr>
-            <tr>
-                <th>Inflation Rate (CPI)</th>
-                <td>{{ "{:.1%}".format(macro_context.get('inflation_rate', 0.05)) }}</td>
-            </tr>
-            <tr>
-                <th>Policy Rate (Repo)</th>
-                <td>{{ "{:.2%}".format(macro_context.get('interest_rate', 0.065)) }} ({{ macro_context.get('interest_rate_trend', 'stable') }})</td>
-            </tr>
-        </table>
-        {% else %}
-        <p>Macro environment data is currently unavailable.</p>
-        {% endif %}
-    </div>
-
-    <div class="section">
-        <h2>5. Live AI Market Insights</h2>
-        {% if ai_intel and ai_intel.get('narratives') %}
-        <p><strong>Market Summary:</strong><br>{{ ai_intel.narratives.get('market_summary', 'N/A') }}</p>
-        <p><strong>Adaptive Allocation Rationale:</strong><br>{{ ai_intel.narratives.get('allocation_rationale', 'N/A') }}</p>
-        {% else %}
-        <p>Live AI market insights are currently unavailable.</p>
-        {% endif %}
-    </div>
-
-    <div class="section">
-        <h2>6. Goal Planning Breakdown</h2>
-
-        <h3>Retirement Goal</h3>
-        <p>Years to Goal: {{ retirement.years_to_goal }}</p>
-        <p>Required Future Corpus: ₹{{ "{:,.2f}".format(retirement.future_corpus) }}</p>
-        <p>Required Monthly SIP: ₹{{ "{:,.2f}".format(retirement.required_sip) }}</p>
-
-        <h3>Child Education Goal</h3>
-        <p>Years to Goal: {{ education.years_to_goal }}</p>
-        <p>Required Future Corpus: ₹{{ "{:,.2f}".format(education.future_corpus) }}</p>
-        <p>Required Monthly SIP: ₹{{ "{:,.2f}".format(education.required_sip) }}</p>
-    </div>
-
-    <div class="section">
-        <h2>7. Existing Portfolio Health</h2>
-        <p><strong>Total Corpus:</strong> ₹{{ "{:,.2f}".format(portfolio.get('total_corpus', 0.0)) }}
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-            <strong>Diversification Score:</strong> {{ portfolio.get('diversification_score', 0) }} / 10
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-            <strong>Risk Exposure:</strong> {{ portfolio.get('risk_exposure', 'N/A (Update Profile)') }}
+        <p style="font-size: 12px; color: #555;">
+            <strong>Methodology Note:</strong> This score represents your "Risk Capacity" (financial ability to take hits) 
+            intersected with "Risk Tolerance" (behavioral comfort). We use a tree-based model to weight these factors.
         </p>
+    </div>
 
-        <h3>Existing Asset Breakdown</h3>
+    <!-- 4. GOAL PLANNING BREAKDOWN -->
+    <div class="section">
+        <h2>4. Goal Planning Breakdown</h2>
+        {% for goal in goals %}
+        <div class="insight-card">
+            <h3>{{ goal.name }}</h3>
+            <table class="data-table">
+                <tr>
+                    <td>Time Horizon: <strong>{{ goal.years }} Years</strong></td>
+                    <td>Target Corpus: <strong>₹{{ "{:,.0f}".format(goal.future_value) }}</strong></td>
+                </tr>
+                <tr>
+                    <td>ROI Assumption: <strong>{{ goal.roi }}%</strong></td>
+                    <td>Inflation Used: <strong>{{ goal.inflation }}%</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Required SIP:</strong></td>
+                    <td><strong style="font-size: 1.2em; color: #0d47a1;">₹{{ "{:,.0f}".format(goal.required_sip) }}</strong></td>
+                </tr>
+            </table>
+            {% if goal.get('step_up') %}
+            <p style="font-size: 11px;">💡 <em>Step-up SIP recommendation: Increase monthly contribution by {{ goal.step_up }}% annually to reach goal faster.</em></p>
+            {% endif %}
+            {% if goal.name.lower() == 'retirement' %}
+            <p style="font-size: 11px;">📉 <em>Estimated post-retirement monthly annuity: ₹{{ "{:,.0f}".format(goal.get('annuity', 0)) }} (Inflation adjusted).</em></p>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <div class="source-footnote">Source: Goal Registry Engine with real-time inflation indexing.</div>
+    </div>
+
+    <!-- 5. EXISTING PORTFOLIO HEALTH -->
+    <div class="section">
+        <h2>5. Existing Portfolio Health</h2>
+        <p>Current Corpus: <strong>₹{{ "{:,.0f}".format(portfolio.get('total_corpus', 0)) }}</strong> | 
+           Diversification: <strong>{{ portfolio.get('diversification_score', 0) }}/10</strong></p>
+        
+        <div class="insights-container">
+            {% for insight in portfolio.get('insights_v2', []) %}
+            <div class="insight-card {{ insight.type }}">
+                <strong>{{ insight.headline }}</strong>: {{ insight.text }}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- 6. INSURANCE & LIABILITY SUMMARY -->
+    <div class="section">
+        <h2>6. Insurance & Liability Summary</h2>
+        <p>A robust plan must protect against catastrophic risks before seeking market alpha.</p>
+        <table class="data-table">
+            <tr>
+                <th>Risk Type</th>
+                <th>Recommendation</th>
+                <th>Priority</th>
+            </tr>
+            {% for item in insurance.recommendations %}
+            <tr>
+                <td>{{ item.type }}</td>
+                <td>{{ item.action }}</td>
+                <td>{{ item.priority }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <!-- 7. TARGET ASSET ALLOCATION -->
+    <div class="section" style="page-break-before: always;">
+        <h2>7. Target Asset Allocation</h2>
+        <p><strong>Reasoning:</strong> Based on your Risk Score of <strong>{{ risk.score }}</strong> and current Market Stability of 
+           <strong>{{ macro.stability }}%</strong>, we have optimized for {{ "Growth" if risk.score > 7 else "capital preservation and steady growth" }}.</p>
+        
         <table class="data-table">
             <tr>
                 <th>Asset Class</th>
-                <th>Allocation (%)</th>
+                <th>Target %</th>
+                <th>Rationale</th>
             </tr>
-            {% for asset, percent in portfolio.breakdown.items() %}
+            {% for asset in allocation.targets %}
             <tr>
-                <td>{{ asset }}</td>
-                <td>{{ percent }}%</td>
-            </tr>
-            {% endfor %}
-        </table>
-
-        <h3>Actionable Insights</h3>
-        <ul>
-            {% for insight in portfolio.insights %}
-            <li>{{ insight }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-
-    <div class="section">
-        <h2>8. Target Asset Allocation</h2>
-        <p>Based on your <strong>{{ risk.category }}</strong> risk profile, here is the recommended target allocation:
-        </p>
-        <table class="data-table">
-            <tr>
-                <th>Asset Class</th>
-                <th>Target Allocation (%)</th>
-            </tr>
-            {% for asset, percent in allocation.allocation.items() %}
-            <tr>
-                <td>{{ asset }}</td>
-                <td>{{ percent }}%</td>
+                <td>{{ asset.name }}</td>
+                <td>{{ asset.percent }}%</td>
+                <td style="font-size: 10px;">{{ asset.rationale }}</td>
             </tr>
             {% endfor %}
         </table>
     </div>
 
+    <!-- 8. INVESTMENT MODE RECOMMENDATION -->
     <div class="section">
-        <h2>9. Mutual Fund Recommendations (India 2026 Strategy)</h2>
+        <h2>8. Investment Mode Recommendation</h2>
+        <div class="insight-card success">
+            <p><strong>Recommended Strategy:</strong> {{ investment_mode.title }}</p>
+            <p style="font-size: 12px;">{{ investment_mode.description }}</p>
+        </div>
+    </div>
+
+    <!-- 9. MUTUAL FUND RECOMMENDATIONS -->
+    <div class="section">
+        <h2>9. Mutual Fund Recommendations (Equity/Hybrid)</h2>
         <table class="data-table">
             <tr>
-                <th>Fund Name & AI Selection Reason</th>
-                <th>Category</th>
-                <th>Risk Level</th>
+                <th>Fund Name</th>
+                <th>Rationale</th>
+                <th>Benchmark Δ (Alpha)</th>
                 <th>Target Weight</th>
                 <th>AI Score</th>
-                <th>Confidence</th>
             </tr>
             {% for fund in funds %}
             <tr>
-                <td>
-                    <strong>{{ fund.name }}</strong>
-                    <div style="font-size: 12px; color: #555; margin-top: 5px;">
-                        <em>🤖 {{ fund.get('reason', fund.get('ai_reason', 'Selected based on multi-factor analysis.')) }}</em>
-                    </div>
-                </td>
-                <td>{{ fund.category }}</td>
-                <td>{{ fund.risk }}</td>
-                <td>{{ fund.allocation_weight }}%</td>
-                <td>{{ "{:.1f}".format(fund.get('score', fund.get('ai_score', 0.0))) }}/100</td>
-                <td>
-                    {% if fund.get('confidence') == 'High' %}
-                    <span style="color: green; font-weight: bold;">High</span>
-                    {% elif fund.get('confidence') == 'Medium' %}
-                    <span style="color: orange; font-weight: bold;">Medium</span>
-                    {% else %}
-                    <span style="color: red; font-weight: bold;">Low</span>
-                    {% endif %}
-                </td>
+                <td><strong>{{ fund.name }}</strong></td>
+                <td style="font-size: 10px;">{{ fund.ai_reason }}</td>
+                <td>{{ fund.alpha }}%</td>
+                <td>{{ fund.weight }}%</td>
+                <td><strong>{{ fund.score }}/100</strong></td>
             </tr>
             {% endfor %}
         </table>
+        <div class="source-footnote">Source: AI Scorer 2.0 (multi-factor persistence model). As-of {{ today }}.</div>
     </div>
 
+    <!-- 10. SCENARIO PROJECTIONS -->
     <div class="section">
         <h2>10. Scenario Projections</h2>
-
-        <h3>SIP Projection Timeline</h3>
-        <p>Future value of current portfolio + monthly savings assuming a base 12% annualized return.</p>
         <table class="data-table">
             <tr>
                 <th>Timeline</th>
-                <th>Projected Future Value</th>
+                <th>Linear Growth (ROI: {{ scenarios.base_roi }}%)</th>
+                <th>Step-up SIP Plan (+{{ scenarios.step_up_pct }}% p.a.)</th>
             </tr>
-            {% for term, value in sip_projections.items() %}
+            {% for row in scenarios.projections %}
             <tr>
-                <td>{{ term }}</td>
-                <td>₹{{ "{:,.2f}".format(value) }}</td>
+                <td>{{ row.year }} Years</td>
+                <td>₹{{ "{:,.0f}".format(row.base_val) }}</td>
+                <td>₹{{ "{:,.0f}".format(row.step_val) }}</td>
             </tr>
             {% endfor %}
         </table>
-
-        <h3>Expected Returns (Goal Horizon)</h3>
-        <p>Future Corpus value extrapolated over the course of your primary Retirement goal timeline under different
-            market conditions.</p>
-        <table class="data-table">
-            <tr>
-                <th>Market Scenario</th>
-                <th>Projected Value</th>
-            </tr>
-            {% for scenario, value in expected_returns.items() %}
-            <tr>
-                <td>{{ scenario }}</td>
-                <td>₹{{ "{:,.2f}".format(value) }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="assumptions-panel">
+            <strong>Assumptions Panel:</strong>
+            - Projections include monthly SIP of ₹{{ "{:,.0f}".format(client.monthly_savings) }}.
+            - All future values are <strong>{{ "Inflation Adjusted" if scenarios.inflation_adjusted else "Nominal" }}</strong>.
+            - Base Inflation: {{ scenarios.inflation_rate }}%.
+        </div>
     </div>
 
+    <!-- 11. MONTE CARLO SIMULATION -->
     <div class="section">
-        <h2>11. Monte Carlo Simulation</h2>
-        <p>Simulating 1,000 potential market scenarios assuming normal distribution around expected returns, the
-            probability of achieving your primary retirement corpus based on your current savings capacity is <strong>{{
-                monte_carlo_prob }}%</strong>.</p>
+        <h2>11. Monte Carlo Simulation (Stress Test)</h2>
+        <p>We simulated 1,000 market paths over your {{ goals[0].years }} year horizon. Result:</p>
+        
+        <div class="insight-card {{ 'success' if monte_carlo.prob >= 80 else ('warning' if monte_carlo.prob >= 50 else 'danger') }}">
+            <strong>Confidence Score: {{ monte_carlo.prob }}%</strong>
+            <p style="font-size: 12px;">{{ monte_carlo.interpretation }}</p>
+        </div>
+
+        {% if monte_carlo.prob < 80 %}
+        <p style="color: #f44336; font-size: 11px;">⚠️ <strong>Fix Recommendation:</strong> {{ monte_carlo.fix_recommendation }}</p>
+        {% endif %}
+        
+        <div style="text-align: center;">
+            <img src="{{ charts.sensitivity }}" class="chart-img" alt="Sensitivity Chart">
+        </div>
     </div>
 
+    <!-- 12. SCORE STANDARDS REFERENCE (APPENDIX) -->
+    <div class="section appendix-page">
+        <h2>12. Appendix: AI Score Standards</h2>
+        <p>Detailed methodology and mathematical basis for the intelligence markers used in this report.</p>
+        
+        {% for standard in standards %}
+        <div style="margin-bottom: 20px; border-bottom: 1px dashed #eee; padding-bottom: 10px;">
+            <h3>{{ standard.score_name }} ({{ standard.scale }})</h3>
+            <p style="font-size: 11px;"><strong>Mathematical Basis:</strong> {{ standard.mathematical_basis }}</p>
+            <p style="font-size: 11px;"><strong>Geopolitical Context:</strong> {{ standard.geopolitical_basis }}</p>
+            <p style="font-size: 11px;"><strong>Historical Calibration:</strong> {{ standard.historical_calibration }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 13. DISCLAIMER -->
     <div class="disclaimer">
-        <h2>Disclaimer</h2>
+        <h2>13. Important Disclosure</h2>
         <p>{{ disclaimer }}</p>
     </div>
 
