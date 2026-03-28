@@ -63,6 +63,6 @@ def render_sip_calculator_widget(macro_context: Optional[Dict[str, Any]] = None)
             annual_return_rate=return_rate / 100.0,
             years=int(years),
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )

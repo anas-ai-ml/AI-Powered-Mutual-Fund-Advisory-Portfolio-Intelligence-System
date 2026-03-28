@@ -9,4 +9,5 @@ from backend.engines.v2.goal_engine import (
     calculate_wealth_creation_goal,
 )
 from backend.engines.v2.investment_mode_engine import recommend_investment_mode
+from backend.engines.v2.portfolio_gap_advisor import PortfolioGapAdvisor
 from backend.engines.v2.risk_engine import calculate_risk_score, compute_risk

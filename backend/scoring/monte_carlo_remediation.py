@@ -232,7 +232,29 @@ def generate_fix_recommendation(
     existing_corpus: float,
     expected_return: float,
     annual_volatility: float = 0.15,
+    gross_monthly_savings: float | None = None,
+    emi_total: float = 0.0,
 ) -> Dict[str, Any]:
+    if current_sip <= 0 and gross_monthly_savings is not None and emi_total > 0:
+        return {
+            "gap_analysis": (
+                f"Your EMI obligations (₹{emi_total:,.0f}/month) exceed your savings "
+                f"capacity (₹{gross_monthly_savings:,.0f}/month). Goal is not achievable "
+                "without reducing liabilities first."
+            ),
+            "option_1": "Reduce EMI obligations before starting or increasing SIP contributions.",
+            "option_2": "Extend retirement age after restructuring liabilities and reassess affordability.",
+            "option_3": (
+                f"Lower the retirement corpus target from ₹{required_corpus:,.0f} only after "
+                "liabilities are brought under control."
+            ),
+            "recommended": "option_1",
+            "extra_years": 0,
+            "adjusted_sip": round(required_sip, 2),
+            "achievable_corpus": round(existing_corpus, 2),
+            "new_probability": 0.0,
+        }
+
     pct = (current_sip / required_sip) if required_sip > 0 else 0.0
     gap_sip = max(0.0, required_sip - current_sip)
     years = max(0, int(retirement_age) - int(current_age))

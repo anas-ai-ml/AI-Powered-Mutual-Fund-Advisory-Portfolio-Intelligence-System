@@ -484,7 +484,46 @@
     </div>
 
     <div class="section">
-        <h2>6. Insurance & Liability Summary</h2>
+        <h2>6. Portfolio Rebalancing Action Plan</h2>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Action</th>
+                    <th>Asset Class</th>
+                    <th>Fund</th>
+                    <th>Monthly SIP</th>
+                    <th>Lumpsum</th>
+                    <th>Urgency</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if portfolio_rebalancing.get('actions') %}
+                    {% for item in portfolio_rebalancing.get('actions', []) %}
+                    <tr>
+                        <td>{{ item.action }}</td>
+                        <td>{{ item.asset_class }}</td>
+                        <td>{{ item.fund_name }}</td>
+                        <td>₹{{ "{:,.0f}".format(item.monthly_sip) }}</td>
+                        <td>₹{{ "{:,.0f}".format(item.lumpsum) }}</td>
+                        <td>{{ item.urgency }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="6">No rebalancing action plan generated.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+            <tfoot>
+                <tr class="source-row">
+                    <td colspan="6">{{ portfolio_rebalancing.get('source_note', '') }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>7. Insurance & Liability Summary</h2>
         <table class="data-table">
             <thead>
                 <tr>
@@ -544,7 +583,7 @@
     </div>
 
     <div class="section page-break">
-        <h2>7. Target Asset Allocation</h2>
+        <h2>8. Target Asset Allocation</h2>
         <p><strong>Reasoning:</strong> {{ allocation.reasoning }}</p>
         <table class="data-table">
             <thead>
@@ -572,7 +611,7 @@
     </div>
 
     <div class="section">
-        <h2>8. Investment Mode Recommendation</h2>
+        <h2>9. Investment Mode Recommendation</h2>
         <div class="mode-card">
             <h3>{{ investment_mode.title }}</h3>
             <p><strong>Trigger Reason:</strong> {{ investment_mode.trigger_reason }}</p>
@@ -589,7 +628,7 @@
     </div>
 
     <div class="section">
-        <h2>9. Mutual Fund Recommendations</h2>
+        <h2>10. Mutual Fund Recommendations</h2>
         {% for fund in funds %}
         <div class="benchmark-card">
             <h3>{{ fund.name }} <span style="font-size: 11px; color: #64748b;">({{ fund.category }})</span></h3>
@@ -628,7 +667,7 @@
     </div>
 
     <div class="section">
-        <h2>10. Scenario Projections</h2>
+        <h2>11. Scenario Projections</h2>
         <div class="assumptions-panel">
             <strong>Assumptions Used</strong><br>
             Inflation Rate: {{ scenarios.assumptions.inflation_rate }}<br>
@@ -732,7 +771,7 @@
     </div>
 
     <div class="section">
-        <h2>11. Monte Carlo Simulation</h2>
+        <h2>12. Monte Carlo Simulation</h2>
         <div class="insight-card {{ 'success' if monte_carlo.prob >= 80 else ('warning' if monte_carlo.prob >= 50 else 'danger') }}">
             <strong>Confidence Score: {{ "{:.1f}".format(monte_carlo.prob) }}%</strong><br>
             {{ monte_carlo.interpretation }}
@@ -758,7 +797,7 @@
     </div>
 
     <div class="section page-break">
-        <h2>12. Score Standards Reference</h2>
+        <h2>13. Score Standards Reference</h2>
         <p>This appendix explains the methodology, mathematical basis, benchmark thresholds, and macro context behind each score used in this report.</p>
         {% for standard in standards %}
         <div class="appendix-entry">
@@ -773,7 +812,7 @@
     </div>
 
     <div class="section disclaimer">
-        <h2>13. Disclaimer</h2>
+        <h2>14. Disclaimer</h2>
         <p>{{ disclaimer }}</p>
     </div>
 </body>

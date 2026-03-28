@@ -50,6 +50,36 @@ def _source_row(source: str, as_of: Optional[str]) -> str:
     return f"Source: {source} | As of {_format_as_of(as_of)}"
 
 
+def _extract_retirement_age(client_data: Dict[str, Any], default: int = 60) -> int:
+    raw_goals = client_data.get("goals", [])
+    if isinstance(raw_goals, list):
+        for goal in raw_goals:
+            if not isinstance(goal, dict):
+                continue
+            goal_type = str(goal.get("type") or goal.get("goal_type") or "").strip().lower()
+            if goal_type == "retirement":
+                inputs = goal.get("inputs") or {}
+                try:
+                    return int(inputs.get("retirement_age", default))
+                except (TypeError, ValueError):
+                    return default
+    if isinstance(raw_goals, dict):
+        retirement_goal = raw_goals.get("retirement", {})
+        try:
+            return int(
+                retirement_goal.get(
+                    "retirement_age",
+                    client_data.get("target_retirement_age", default),
+                )
+            )
+        except (TypeError, ValueError):
+            return default
+    try:
+        return int(client_data.get("target_retirement_age", default))
+    except (TypeError, ValueError):
+        return default
+
+
 class ReportGenerator:
     def __init__(self):
         self.report_data = {}
@@ -687,7 +717,26 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         "source_note": _source_row("Portfolio Health Engine", macro_as_of),
     }
 
-    # 6. Allocation & Macro
+    # 6. Portfolio Rebalancing Action Plan
+    rebalancing_raw = analysis_data.get("portfolio_rebalancing", {})
+    rebalancing_actions = []
+    for item in rebalancing_raw.get("fund_actions", []):
+        rebalancing_actions.append(
+            {
+                "action": str(item.get("action", "MAINTAIN")),
+                "asset_class": str(item.get("asset_class", "")).title(),
+                "fund_name": item.get("fund_name") or item.get("replaces") or "-",
+                "monthly_sip": float(item.get("suggested_sip", 0.0) or 0.0),
+                "lumpsum": float(item.get("suggested_lumpsum", 0.0) or 0.0),
+                "urgency": str(item.get("urgency", "low")).title(),
+            }
+        )
+    portfolio_rebalancing = {
+        "actions": rebalancing_actions,
+        "source_note": _source_row("Portfolio Gap Advisor", macro_as_of),
+    }
+
+    # 7. Allocation & Macro
     macro = {
         "stability": _safe_pct(
             macro_raw.get("market_stability_score", macro_raw.get("stability_score", 0.8)),
@@ -740,7 +789,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         "source_note": _source_row("Allocation Engine + macro overlay", macro_as_of),
     }
 
-    # 7. Investment Mode
+    # 8. Investment Mode
     mode_raw = analysis_data.get("investment_mode_recommendation") or analysis_data.get("investment_mode") or {}
     investment_mode = {
         "title": mode_raw.get("recommended_mode", mode_raw.get("primary_mode", "SIP")),
@@ -754,7 +803,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         "source_note": _source_row("Investment Mode Engine", macro_as_of),
     }
 
-    # 8. Funds
+    # 9. Funds
     funds_raw = analysis_data.get("funds", [])
     fund_explanations = {item["name"]: item for item in explain_all_funds(funds_raw)}
     funds = []
@@ -778,7 +827,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
             "risk_note": rationale.get("risk_note", ""),
         })
 
-    # 9. Scenarios & Projections
+    # 10. Scenarios & Projections
     primary_goal_raw = primary_goal
     primary_sip_comparison = primary_goal_raw.get("sip_comparison", {})
     goal_years = int(primary_goal_raw.get("years_to_goal", 10) or 10)
@@ -852,7 +901,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         "source_note": _source_row("Projection Engine + macro assumptions", macro_as_of),
     }
 
-    # 10. Monte Carlo
+    # 11. Monte Carlo
     mc_raw = analysis_data.get("monte_carlo", {})
     prob = float(mc_raw.get("success_probability", 75.0))
     required_sip = float(primary_goal_raw.get("required_sip", 0.0))
@@ -863,10 +912,12 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
             required_sip=required_sip,
             required_corpus=float(primary_goal_raw.get("future_corpus", 0.0)),
             current_age=int(client_data.get("age", 30)),
-            retirement_age=int(client_data.get("goals", {}).get("retirement", {}).get("age", 60)),
+            retirement_age=_extract_retirement_age(client_data, 60),
             current_monthly_expense=float(client_data.get("monthly_expense", 0.0)),
             existing_corpus=existing_corpus,
             expected_return=base_roi,
+            gross_monthly_savings=float(client_data.get("monthly_savings", 0.0)),
+            emi_total=float(client_data.get("emi_total", 0.0)),
         )
     sensitivity = None
     if primary_goal_raw and goal_years > 0 and required_sip > 0:
@@ -937,6 +988,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
         "goals": goals,
         "insurance": insurance,
         "portfolio": portfolio,
+        "portfolio_rebalancing": portfolio_rebalancing,
         "macro": macro,
         "allocation": allocation,
         "investment_mode": investment_mode,
@@ -959,6 +1011,7 @@ def generate_full_report(client_data, analysis_data):
         goals=v2_data["goals"],
         allocation_data=v2_data["allocation"],
         portfolio_data=v2_data["portfolio"],
+        portfolio_rebalancing=v2_data["portfolio_rebalancing"],
         insurance_data=v2_data["insurance"],
         macro_data=v2_data["macro"],
         funds=v2_data["funds"],
@@ -967,5 +1020,123 @@ def generate_full_report(client_data, analysis_data):
         investment_mode=v2_data["investment_mode"]
     )
 
+    with open(output_path, "rb") as pdf_file:
+        return pdf_file.read()
+
+
+def generate_proposal_deck_data(client_data: Dict[str, Any], analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    v2_data = generate_report_v2_data(client_data, analysis_data)
+    client_name = str(
+        client_data.get("name")
+        or client_data.get("client_name")
+        or client_data.get("marital_status", "Client")
+    )
+    monthly_sip = float(
+        client_data.get(
+            "effective_monthly_savings",
+            client_data.get("monthly_savings", 0.0),
+        )
+    )
+    base_roi = 0.12
+    inflation_rate = float(v2_data.get("macro", {}).get("inflation_rate", 0.06))
+    sip_rows = []
+    for years in (10, 15, 20):
+        months = years * 12
+        projected_corpus = (
+            monthly_sip
+            * (((1 + (base_roi / 12.0)) ** months - 1) / (base_roi / 12.0))
+            * (1 + (base_roi / 12.0))
+            if monthly_sip > 0
+            else 0.0
+        )
+        total_invested = monthly_sip * months
+        multiplier = projected_corpus / total_invested if total_invested > 0 else 0.0
+        sip_rows.append(
+            {
+                "horizon": f"{years} Years",
+                "monthly_sip": monthly_sip,
+                "total_invested": total_invested,
+                "projected_corpus": projected_corpus,
+                "multiplier": multiplier,
+            }
+        )
+
+    funds = analysis_data.get("funds", [])
+    historical_rows = [
+        {
+            "name": fund.get("name", "Unknown Fund"),
+            "category": fund.get("category", "N/A"),
+            "weight": float(fund.get("allocation_weight", fund.get("weight", 0.0))),
+            "return_1y": float(fund.get("1y", 0.0)),
+            "return_3y": float(fund.get("3y", 0.0)),
+            "return_5y": float(fund.get("5y", 0.0)),
+        }
+        for fund in funds
+    ]
+    benchmark_rows = [
+        {
+            "name": fund.get("name", "Unknown Fund"),
+            "benchmark_index": fund.get("benchmark_index", "Benchmark"),
+            "benchmark_1y_return": float(fund.get("benchmark_1y_return", 0.0)),
+            "benchmark_3y_return": float(fund.get("benchmark_3y_return", 0.0)),
+            "alpha_1y": float(fund.get("alpha_1y", 0.0)),
+            "alpha_3y": float(fund.get("alpha_3y", 0.0)),
+        }
+        for fund in funds
+    ]
+
+    allocation_reasoning = v2_data.get("allocation", {}).get("reasoning", "Recommended based on risk profile and market context.")
+    investment_mode = v2_data.get("investment_mode", {})
+    advisor_name = str(client_data.get("advisor_name") or "Assigned Advisor")
+    advisor_email = str(client_data.get("advisor_email") or "advisor@example.com")
+    advisor_role = str(client_data.get("advisor_role") or "Advisor")
+
+    return {
+        "title": f"{client_name} Investment Proposal",
+        "subtitle": "A shareable advisor presentation deck based on current goals, risk profile, and market context.",
+        "client_snapshot": {
+            "name": client_name,
+            "age": int(v2_data.get("client", {}).get("age", client_data.get("age", 0) or 0)),
+            "dependents": int(v2_data.get("client", {}).get("dependents", client_data.get("dependents", 0) or 0)),
+            "monthly_income": float(v2_data.get("client", {}).get("monthly_income", client_data.get("monthly_income", 0.0))),
+            "investible_surplus": monthly_sip,
+            "existing_corpus": float(v2_data.get("client", {}).get("existing_corpus", client_data.get("existing_corpus", 0.0))),
+            "risk_category": str(v2_data.get("risk", {}).get("category", "Moderate")),
+            "primary_goal": str((v2_data.get("goals") or [{"name": "Wealth Creation"}])[0].get("name", "Wealth Creation")),
+            "source_note": _source_row("Client profile + planning engines", datetime.now().isoformat()),
+        },
+        "why_this_category": {
+            "headline": (
+                f"The proposed category mix is built for a {v2_data.get('risk', {}).get('category', 'Moderate')} investor "
+                f"with inflation at {inflation_rate:.1%} and a {investment_mode.get('title', 'SIP')} deployment path."
+            ),
+            "narrative": investment_mode.get("description", allocation_reasoning),
+            "allocation_reasoning": allocation_reasoning,
+            "market_context": investment_mode.get("trigger_reason", "Current market conditions support disciplined allocation."),
+            "source_note": v2_data.get("allocation", {}).get("source_note", _source_row("Allocation Engine", datetime.now().isoformat())),
+        },
+        "historical_performance": historical_rows,
+        "historical_source_note": _source_row("Fund recommendation universe", datetime.now().isoformat()),
+        "sip_illustration": {
+            "rows": sip_rows,
+            "source_note": _source_row("SIP illustration at 12% annualized base case", datetime.now().isoformat()),
+        },
+        "benchmark_comparison": benchmark_rows,
+        "benchmark_source_note": _source_row("Fund benchmark enrichment", datetime.now().isoformat()),
+        "advisor_contact": {
+            "name": advisor_name,
+            "role": advisor_role.title(),
+            "email": advisor_email,
+            "phone": str(client_data.get("advisor_phone") or "Contact via advisory desk"),
+            "note": "For discussion, modifications, or execution support, please contact your advisor directly.",
+        },
+    }
+
+
+def generate_proposal_deck_report(client_data, analysis_data):
+    deck_data = generate_proposal_deck_data(client_data, analysis_data)
+    from backend.report.pdf_generator import generate_proposal_deck_pdf
+
+    output_path = generate_proposal_deck_pdf(deck_data=deck_data)
     with open(output_path, "rb") as pdf_file:
         return pdf_file.read()

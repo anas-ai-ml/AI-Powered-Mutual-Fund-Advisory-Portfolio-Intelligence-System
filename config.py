@@ -2,7 +2,7 @@ FEATURE_FLAGS = {
     "v2_risk_explanation": True,
     "advanced_goal_types": True,
     "investment_mode_recommendation": True,
-    "advanced_products": False,
+    "advanced_products": False,  # not ready yet
 }
 
 EXCLUDE_ETF_FROM_ADVISORY = True

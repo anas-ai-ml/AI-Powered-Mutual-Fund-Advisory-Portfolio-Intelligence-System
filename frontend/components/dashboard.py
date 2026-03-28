@@ -1,14 +1,16 @@
 import streamlit as st
+from copy import deepcopy
 from datetime import datetime
 from config import EXCLUDE_ETF_FROM_ADVISORY
 from settings import ADVANCED_PRODUCTS_ENABLED
 from backend.data.benchmark_indices import enrich_with_benchmark_metrics, infer_fund_type
 from backend.engines.risk_engine import compute_risk
 from backend.engines.goal_engine import (
-    calculate_retirement_goal,
-    calculate_child_education_goal,
+    GoalType,
+    calculate_goal,
 )
 from backend.engines.allocation_engine import get_asset_allocation
+from backend.engines.v2.portfolio_gap_advisor import PortfolioGapAdvisor
 from backend.engines.monte_carlo_engine import run_monte_carlo_simulation
 from backend.engines.portfolio_engine import analyze_portfolio
 from backend.engines.recommendation_engine import (
@@ -16,7 +18,14 @@ from backend.engines.recommendation_engine import (
     suggest_advanced_products,
 )
 from backend.engines.recommendation_engine import get_processed_fund_universe
-from backend.api.report_generator import generate_full_report
+try:
+    from backend.api.report_generator import (
+        generate_full_report,
+        generate_proposal_deck_report,
+    )
+except ImportError:
+    generate_full_report = None
+    generate_proposal_deck_report = None
 from backend.scoring.monte_carlo_remediation import (
     build_sensitivity_analysis,
     generate_fix_recommendation,
@@ -33,6 +42,11 @@ from frontend.components.projection_panels import (
 )
 from frontend.components.sip_calculator_widget import render_sip_calculator_widget
 from frontend.components.score_intelligence_panel import render_score_intelligence_panel
+from frontend.api_client import (
+    APIClientError,
+    create_client_audit_log,
+    save_client_analysis_record,
+)
 
 # ── New Intelligence Layers ───────────────────────────────────────────────────
 from backend.engines.intelligence.context_engine import get_macro_context
@@ -180,6 +194,281 @@ def _build_alternative_funds(current_fund: dict, universe_df, top_n: int = 3) ->
     return alternatives
 
 
+def _normalize_goal_type_value(goal_type: str | None) -> str:
+    if not goal_type:
+        return GoalType.CUSTOM.value
+    cleaned = str(goal_type).strip()
+    if cleaned in GoalType.__members__:
+        return GoalType[cleaned].value
+    lowered = cleaned.lower()
+    for goal_enum in GoalType:
+        if goal_enum.value == lowered:
+            return goal_enum.value
+    return GoalType.CUSTOM.value
+
+
+def _normalize_client_goals(client_data: dict) -> list[dict]:
+    raw_goals = client_data.get("goals", [])
+    goals: list[dict] = []
+
+    if isinstance(raw_goals, list):
+        for goal in raw_goals:
+            if not isinstance(goal, dict):
+                continue
+            goals.append(
+                {
+                    "type": _normalize_goal_type_value(
+                        goal.get("type") or goal.get("goal_type")
+                    ),
+                    "inputs": dict(goal.get("inputs") or {}),
+                }
+            )
+        return goals
+
+    if isinstance(raw_goals, dict):
+        retirement_goal = raw_goals.get("retirement")
+        if retirement_goal:
+            goals.append(
+                {
+                    "type": GoalType.RETIREMENT.value,
+                    "inputs": {
+                        "current_monthly_expense": float(retirement_goal.get("expense", 50000.0)),
+                        "retirement_age": int(
+                            client_data.get(
+                                "target_retirement_age",
+                                max(60, int(client_data.get("age", 30)) + 1),
+                            )
+                        ),
+                        "include_post_retirement_income": bool(
+                            retirement_goal.get("include_post_retirement_income", False)
+                        ),
+                        "post_retirement_income": float(
+                            retirement_goal.get("post_retirement_income", 0.0)
+                        ),
+                        "post_retirement_years": int(
+                            retirement_goal.get("post_retirement_years", 25)
+                        ),
+                    },
+                }
+            )
+        education_goal = raw_goals.get("education")
+        if education_goal:
+            goals.append(
+                {
+                    "type": GoalType.CHILD_EDUCATION.value,
+                    "inputs": {
+                        "target_amount": float(education_goal.get("cost", 2000000.0)),
+                        "years_to_goal": int(education_goal.get("years", 12)),
+                    },
+                }
+            )
+    return goals
+
+
+def _build_goal_calculation_payload(goal_entry: dict, client_data: dict, annual_step_up: float) -> dict:
+    goal_type = _normalize_goal_type_value(goal_entry.get("type"))
+    inputs = dict(goal_entry.get("inputs") or {})
+    inputs["annual_sip_step_up"] = annual_step_up
+
+    if goal_type == GoalType.RETIREMENT.value:
+        inputs.setdefault("current_age", int(client_data.get("age", 30)))
+        inputs.setdefault(
+            "current_monthly_expense",
+            float(inputs.get("expense", inputs.get("current_monthly_expense", 0.0))),
+        )
+        inputs.setdefault(
+            "retirement_age",
+            int(
+                client_data.get(
+                    "target_retirement_age",
+                    max(60, int(client_data.get("age", 30)) + 1),
+                )
+            ),
+        )
+        inputs.setdefault("existing_corpus", float(client_data.get("existing_corpus", 0.0)))
+    elif goal_type == GoalType.CHILD_EDUCATION.value:
+        inputs.setdefault(
+            "target_amount",
+            float(inputs.get("present_cost", inputs.get("cost", inputs.get("target_amount", 0.0)))),
+        )
+        inputs.setdefault(
+            "years_to_goal",
+            int(inputs.get("years", inputs.get("years_to_goal", 0))),
+        )
+        inputs.setdefault("current_age", int(client_data.get("age", 30)))
+    elif goal_type == GoalType.EMERGENCY_FUND.value:
+        inputs.setdefault(
+            "monthly_expenses",
+            max(
+                0.0,
+                float(client_data.get("monthly_income", 0.0))
+                - float(client_data.get("monthly_savings", 0.0)),
+            ),
+        )
+        inputs.setdefault("months_of_coverage", int(inputs.get("months_of_coverage", 6)))
+    else:
+        inputs.setdefault(
+            "target_amount",
+            float(inputs.get("present_cost", inputs.get("cost", inputs.get("target_amount", 0.0)))),
+        )
+        inputs.setdefault(
+            "years_to_goal",
+            int(inputs.get("years", inputs.get("years_to_goal", 0))),
+        )
+
+    return inputs
+
+
+def _editor_key(client_id: int | str, suffix: str) -> str:
+    return f"proposal_editor_{client_id}_{suffix}"
+
+
+def _allocation_input_key(client_id: int | str, asset_name: str) -> str:
+    safe_asset = "".join(char.lower() if char.isalnum() else "_" for char in asset_name)
+    return _editor_key(client_id, f"alloc_{safe_asset}")
+
+
+def _allocations_differ(system_allocation: dict, advisor_allocation: dict, tolerance: float = 0.05) -> bool:
+    keys = set(system_allocation) | set(advisor_allocation)
+    return any(
+        abs(float(system_allocation.get(key, 0.0)) - float(advisor_allocation.get(key, 0.0))) > tolerance
+        for key in keys
+    )
+
+
+def _render_allocation_summary(allocation_weights: dict) -> None:
+    for asset_name, weight in allocation_weights.items():
+        st.markdown(f"- **{asset_name}**: {float(weight):.2f}%")
+
+
+def _auto_balance_allocations(
+    client_id: int | str,
+    advisor_allocation: dict,
+    system_allocation: dict,
+) -> None:
+    allocation_keys = list(advisor_allocation.keys())
+    current_total = float(sum(float(advisor_allocation.get(key, 0.0)) for key in allocation_keys))
+
+    if current_total > 0:
+        normalized = {
+            asset_name: round((float(advisor_allocation.get(asset_name, 0.0)) / current_total) * 100.0, 2)
+            for asset_name in allocation_keys
+        }
+    else:
+        system_total = float(sum(float(system_allocation.get(key, 0.0)) for key in allocation_keys))
+        if system_total > 0:
+            normalized = {
+                asset_name: round((float(system_allocation.get(asset_name, 0.0)) / system_total) * 100.0, 2)
+                for asset_name in allocation_keys
+            }
+        else:
+            equal_weight = round(100.0 / len(allocation_keys), 2) if allocation_keys else 0.0
+            normalized = {asset_name: equal_weight for asset_name in allocation_keys}
+
+    running_total = 0.0
+    for idx, asset_name in enumerate(allocation_keys):
+        asset_key = _allocation_input_key(client_id, asset_name)
+        if idx == len(allocation_keys) - 1:
+            st.session_state[asset_key] = round(max(0.0, 100.0 - running_total), 2)
+        else:
+            weight = float(normalized.get(asset_name, 0.0))
+            st.session_state[asset_key] = weight
+            running_total += weight
+
+
+def _build_current_portfolio_payload(client_data: dict) -> dict:
+    portfolio = client_data.get("portfolio")
+    if isinstance(portfolio, dict) and portfolio:
+        return {
+            "fd_bonds": float(portfolio.get("fd_bonds", portfolio.get("debt", 0.0)) or 0.0),
+            "gold": float(portfolio.get("gold", 0.0) or 0.0),
+            "cash": float(portfolio.get("cash", portfolio.get("existing_savings", 0.0)) or 0.0),
+            "equity": float(portfolio.get("equity", portfolio.get("existing_mutual_funds", 0.0)) or 0.0),
+        }
+    return {
+        "fd_bonds": float(client_data.get("existing_fd", 0.0) or 0.0),
+        "gold": float(client_data.get("existing_gold", 0.0) or 0.0),
+        "cash": float(client_data.get("existing_savings", 0.0) or 0.0),
+        "equity": float(client_data.get("existing_mutual_funds", 0.0) or 0.0),
+    }
+
+
+def _build_target_allocation_payload(allocation_weights: dict) -> dict:
+    target = {"equity": 0.0, "debt": 0.0, "gold": 0.0}
+    for asset_name, weight in (allocation_weights or {}).items():
+        lowered = str(asset_name).lower()
+        numeric_weight = float(weight or 0.0)
+        if "gold" in lowered:
+            target["gold"] += numeric_weight
+        elif "debt" in lowered or "bond" in lowered or "liquid" in lowered or "cash" in lowered:
+            target["debt"] += numeric_weight
+        else:
+            target["equity"] += numeric_weight
+    return target
+
+
+def _apply_gap_recommendations(current_portfolio: dict, fund_actions: list[dict]) -> dict:
+    total_corpus = sum(float(value or 0.0) for value in (current_portfolio or {}).values())
+    additional_monthly_sip = sum(
+        float(action.get("suggested_sip", 0.0) or 0.0)
+        for action in (fund_actions or [])
+        if str(action.get("action", "")).upper() in {"INCREASE", "ENTER"}
+    )
+    suggested_lumpsum = sum(
+        float(action.get("suggested_lumpsum", 0.0) or 0.0)
+        for action in (fund_actions or [])
+        if str(action.get("action", "")).upper() in {"INCREASE", "ENTER"}
+    )
+    return {
+        "initial_corpus": round(total_corpus, 2),
+        "monthly_sip_increment": round(additional_monthly_sip, 2),
+        "suggested_lumpsum": round(suggested_lumpsum, 2),
+    }
+
+
+def _log_report_issue(message: str, context: dict | None = None) -> None:
+    client_id = st.session_state.get("selected_client_id")
+    token = st.session_state.get("advisor_token")
+    if not client_id or not token:
+        return
+    try:
+        create_client_audit_log(
+            token,
+            int(client_id),
+            {
+                "action": "report_issue",
+                "notes": message,
+                "after_value": context or {},
+            },
+        )
+    except APIClientError:
+        pass
+
+
+def _log_report_issued(report_type: str, version: str) -> None:
+    client_id = st.session_state.get("selected_client_id")
+    token = st.session_state.get("advisor_token")
+    if not client_id or not token:
+        return
+    try:
+        create_client_audit_log(
+            token,
+            int(client_id),
+            {
+                "action": "report_issued",
+                "after_value": {
+                    "report_type": report_type,
+                    "issued_at": datetime.now().isoformat(),
+                    "issued_by": st.session_state.get("advisor_name"),
+                    "version": version,
+                },
+                "notes": f"{report_type.replace('_', ' ').title()} prepared for download.",
+            },
+        )
+    except APIClientError:
+        pass
+
+
 def render_dashboard(client_data: dict):
     # ── NEW: Macro Context Engine ─────────────────────────────────────────────
     macro_context = get_macro_context()
@@ -236,6 +525,23 @@ def render_dashboard(client_data: dict):
     projection_topup_rate = max(0.0, annual_sip_step_up_pct / 100.0)
 
     allocation = get_asset_allocation(risk_profile["score"])
+    try:
+        from backend.api.advisor_overrides import apply_overrides
+
+        allocation = apply_overrides(
+            allocation if isinstance(allocation, dict) else {},
+            client_data,
+        )
+    except Exception:
+        pass
+    override_applied = allocation.get("override_applied", False)
+    override_reason = allocation.get("override_reason", "")
+    try:
+        from backend.insurance.gap_analyzer import analyze_gap
+
+        insurance_gap = analyze_gap(client_data)
+    except Exception:
+        insurance_gap = {"life_gap": 0, "health_gap": 0, "status": "unavailable"}
 
     # Fetch recommendations first so AI layer can score them
     recommended_funds_base, is_live_data = suggest_mutual_funds(
@@ -274,28 +580,26 @@ def render_dashboard(client_data: dict):
         item.get("is_fallback") for item in (live_inflation_meta, live_repo_meta, vix_meta)
     )
 
-    # Goal Confidence Band: only available if a retirement goal is set.
+    # Goal calculations are now dynamic and driven by the saved goal list.
+    goal_results = []
     ret_result = None
     probability = None
     ret_expense = None
     try:
-        goals = client_data.get("goals", {})
-        ret_data = goals.get("retirement")
-        if ret_data:
-            ret_expense = ret_data.get("expense")
-            ret_result = calculate_retirement_goal(
-                current_age=client_data["age"],
-                current_monthly_expense=ret_expense,
-                expected_return_rate=projection_base_roi,
-                retirement_age=client_data["target_retirement_age"],
-                existing_corpus=client_data["existing_corpus"],
-                post_retirement_income=ret_data.get("post_retirement_income"),
-                post_retirement_years=int(ret_data.get("post_retirement_years", 25)),
-                include_post_retirement_income=bool(
-                    ret_data.get("include_post_retirement_income", False)
-                ),
-                annual_sip_step_up=projection_topup_rate,
+        for goal_entry in _normalize_client_goals(client_data):
+            goal_type = _normalize_goal_type_value(goal_entry.get("type"))
+            goal_payload = _build_goal_calculation_payload(
+                goal_entry,
+                client_data,
+                projection_topup_rate,
             )
+            result = calculate_goal(goal_type, goal_payload, projection_base_roi)
+            goal_results.append(result)
+            if goal_type == GoalType.RETIREMENT.value and ret_result is None:
+                ret_result = result
+                ret_expense = goal_payload.get("current_monthly_expense")
+
+        if ret_result:
             probability = run_monte_carlo_simulation(
                 initial_corpus=client_data["existing_corpus"],
                 monthly_sip=effective_monthly_savings,
@@ -305,6 +609,7 @@ def render_dashboard(client_data: dict):
                 annual_volatility=0.15,
             )
     except Exception:
+        goal_results = []
         ret_result = None
         probability = None
         ret_expense = None
@@ -327,6 +632,8 @@ def render_dashboard(client_data: dict):
             existing_corpus=float(client_data["existing_corpus"]),
             expected_return=projection_base_roi,
             annual_volatility=0.15,
+            gross_monthly_savings=float(client_data.get("monthly_savings", 0.0)),
+            emi_total=float(client_data.get("emi_total", 0.0)),
         )
 
     st.markdown("---")
@@ -532,7 +839,7 @@ def render_dashboard(client_data: dict):
             )
             st.metric(
                 "Market Stability",
-                f"{float(investment_mode_recommendation.get('market_stability_score', 0.0)):.2f}",
+                f"{float(investment_mode_recommendation.get('market_stability_score', 0.0)) * 100:.0f}%",
             )
         with mode_col2:
             st.markdown(
@@ -546,6 +853,89 @@ def render_dashboard(client_data: dict):
             )
     else:
         st.info("Smart deployment recommendation unavailable.")
+
+    st.markdown("---")
+    st.subheader("Portfolio Rebalancing Recommendations")
+    gap_advisor = PortfolioGapAdvisor()
+    current_portfolio_payload = _build_current_portfolio_payload(client_data)
+    target_allocation_payload = _build_target_allocation_payload(allocation["allocation"])
+    gap_recommendations = gap_advisor.compute_allocation_gap(
+        current_portfolio=current_portfolio_payload,
+        target_allocation=target_allocation_payload,
+        total_corpus=float(portfolio_analysis.get("total_corpus", client_data.get("existing_corpus", 0.0)) or 0.0),
+    )
+    fund_actions = gap_advisor.recommend_funds_for_gap(
+        gap_list=gap_recommendations,
+        risk_profile=risk_profile,
+        market_signals=macro_context,
+        existing_funds=client_data.get("existing_funds", []),
+    )
+    rebalanced_projection = None
+    improved_confidence = None
+    if gap_recommendations and ret_result is not None and probability is not None:
+        rebalanced_projection = _apply_gap_recommendations(
+            current_portfolio_payload,
+            fund_actions,
+        )
+        adjusted_monthly_sip = effective_monthly_savings + float(
+            rebalanced_projection.get("monthly_sip_increment", 0.0)
+        )
+        improved_confidence = run_monte_carlo_simulation(
+            initial_corpus=float(rebalanced_projection.get("initial_corpus", client_data.get("existing_corpus", 0.0))),
+            monthly_sip=adjusted_monthly_sip,
+            years=int(ret_result.get("years_to_goal", 0)),
+            target_corpus=float(ret_result.get("future_corpus", 0.0)),
+            expected_annual_return=projection_base_roi,
+            annual_volatility=0.15,
+        )
+        if improved_confidence > probability:
+            st.success(
+                "Following these recommendations improves your goal confidence "
+                f"from {probability:.0f}% to {improved_confidence:.0f}%."
+            )
+    if not fund_actions:
+        st.info("No portfolio rebalancing actions are required right now.")
+    else:
+        action_styles = {
+            "INCREASE": ("#14532d", "#bbf7d0", "🟢"),
+            "ENTER": ("#14532d", "#bbf7d0", "🟢"),
+            "MAINTAIN": ("#78350f", "#fde68a", "🟡"),
+            "REDUCE": ("#7f1d1d", "#fecaca", "🔴"),
+            "EXIT": ("#7f1d1d", "#fecaca", "🔴"),
+        }
+        for recommendation in fund_actions:
+            action = str(recommendation.get("action", "MAINTAIN")).upper()
+            bg, border, icon = action_styles.get(action, ("#334155", "#cbd5e1", "ℹ️"))
+            title_parts = [f"{icon} {action}", str(recommendation.get("asset_class", "")).title()]
+            if recommendation.get("fund_name"):
+                title_parts.append(str(recommendation.get("fund_name")))
+            details = []
+            if action in {"INCREASE", "ENTER"}:
+                details.append(
+                    f"Suggested SIP: ₹{float(recommendation.get('suggested_sip', 0.0)):,.0f}/month"
+                )
+                details.append(
+                    f"Suggested Lumpsum: ₹{float(recommendation.get('suggested_lumpsum', 0.0)):,.0f}"
+                )
+            elif action == "MAINTAIN":
+                details.append("No action needed, continue current SIP.")
+            else:
+                if recommendation.get("replaces"):
+                    details.append(f"Reduce: {recommendation.get('replaces')}")
+                details.append(str(recommendation.get("rebalance_note", "")))
+            benchmark_alpha = recommendation.get("benchmark_alpha")
+            if benchmark_alpha not in (None, "") and action in {"INCREASE", "ENTER"}:
+                details.append(f"Benchmark alpha: {float(benchmark_alpha):+.1f}%")
+            st.markdown(
+                f"""
+                <div style="background:{bg};border-left:4px solid {border};padding:14px 16px;border-radius:8px;margin-bottom:12px;">
+                    <div style="color:{border};font-weight:700;margin-bottom:6px;">{' · '.join(title_parts)}</div>
+                    <div style="color:#f8fafc;line-height:1.5;margin-bottom:8px;">{recommendation.get("reason", "")}</div>
+                    <div style="color:#e2e8f0;line-height:1.5;">{'<br>'.join([detail for detail in details if detail])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
     if ADVANCED_PRODUCTS_ENABLED:
@@ -686,89 +1076,90 @@ def render_dashboard(client_data: dict):
     # Goals Analysis
     st.markdown("---")
     st.subheader("Financial Goals Analysis")
-    col1, col2 = st.columns(2)
+    if not goal_results:
+        st.info("Add one or more goals in the client profile to see corpus and SIP analysis.")
+    else:
+        goal_columns = st.columns(2)
+        for idx, goal_result in enumerate(goal_results):
+            with goal_columns[idx % 2]:
+                goal_name = str(goal_result.get("goal_name", "Goal"))
+                years_to_goal = goal_result.get("years_to_goal")
+                heading = f"#### {goal_name}"
+                if years_to_goal is not None:
+                    heading = f"{heading} ({int(years_to_goal)} Yrs)"
+                st.markdown(heading)
 
-    with col1:
-        if ret_result is None:
-            st.markdown("#### Retirement (Goal not set)")
-            st.info("Set a retirement goal to see required corpus and SIP.")
-        else:
-            st.markdown(f"#### Retirement ({ret_result['years_to_goal']} Yrs)")
-            if ret_result.get("post_retirement_income_planning_enabled"):
-                acc_col, dist_col = st.columns(2)
-                with acc_col:
-                    st.markdown("**Accumulation Phase**")
+                if goal_result.get("post_retirement_income_planning_enabled"):
+                    acc_col, dist_col = st.columns(2)
+                    with acc_col:
+                        st.markdown("**Accumulation Phase**")
+                        st.metric(
+                            "Corpus needed by retirement age",
+                            f"₹{goal_result.get('future_corpus', 0.0):,.0f}",
+                        )
+                        st.metric(
+                            "Required monthly SIP",
+                            f"₹{goal_result.get('required_sip', 0.0):,.0f}",
+                        )
+                    distribution = goal_result.get("distribution_phase", {})
+                    with dist_col:
+                        st.markdown("**Distribution Phase**")
+                        st.metric(
+                            "Corpus that will sustain income",
+                            (
+                                f"₹{distribution.get('annuity_corpus_required', 0.0):,.0f}"
+                                f" for ₹{distribution.get('monthly_income', 0.0):,.0f}/month"
+                            ),
+                        )
+                        gap_value = float(distribution.get("shortfall_or_surplus", 0.0))
+                        gap_label = "Shortfall" if gap_value < 0 else "Surplus"
+                        st.metric(gap_label, f"₹{abs(gap_value):,.0f}")
+                    extra_sip = float(
+                        goal_result.get("distribution_phase", {}).get(
+                            "additional_sip_required", 0.0
+                        )
+                    )
+                    years = int(goal_result.get("distribution_phase", {}).get("years", 25))
+                    income_need = float(
+                        goal_result.get("distribution_phase", {}).get("monthly_income", 0.0)
+                    )
+                    st.caption(
+                        f"Corpus that will sustain ₹{income_need:,.0f}/month for {years} years is shown above."
+                    )
+                    if extra_sip > 0:
+                        st.warning(
+                            f"You need to increase your SIP by ₹{extra_sip:,.0f} to cover your post-retirement income needs."
+                        )
+                else:
                     st.metric(
-                        "Corpus needed by retirement age",
-                        f"₹{ret_result['future_corpus']:,.0f}",
+                        "Required Future Corpus",
+                        f"₹{goal_result.get('future_corpus', 0.0):,.0f}",
                     )
                     st.metric(
-                        "Required monthly SIP",
-                        f"₹{ret_result['required_sip']:,.0f}",
+                        "Required Monthly SIP",
+                        f"₹{goal_result.get('required_sip', 0.0):,.0f}",
                     )
-                distribution = ret_result.get("distribution_phase", {})
-                with dist_col:
-                    st.markdown("**Distribution Phase**")
-                    st.metric(
-                        "Corpus that will sustain income",
-                        (
-                            f"₹{distribution.get('annuity_corpus_required', 0.0):,.0f}"
-                            f" for ₹{distribution.get('monthly_income', 0.0):,.0f}/month"
-                        ),
-                    )
-                    gap_value = float(distribution.get("shortfall_or_surplus", 0.0))
-                    gap_label = "Shortfall" if gap_value < 0 else "Surplus"
-                    st.metric(gap_label, f"₹{abs(gap_value):,.0f}")
-                extra_sip = float(
-                    ret_result.get("distribution_phase", {}).get(
-                        "additional_sip_required", 0.0
-                    )
-                )
-                years = int(ret_result.get("distribution_phase", {}).get("years", 25))
-                income_need = float(
-                    ret_result.get("distribution_phase", {}).get("monthly_income", 0.0)
-                )
-                st.caption(
-                    f"Corpus that will sustain ₹{income_need:,.0f}/month for {years} years is shown above."
-                )
-                if extra_sip > 0:
-                    st.warning(
-                        f"You need to increase your SIP by ₹{extra_sip:,.0f} to cover your post-retirement income needs."
-                    )
-            else:
-                st.metric(
-                    "Required Future Corpus", f"₹{ret_result['future_corpus']:,.0f}"
-                )
-                st.metric("Required Monthly SIP", f"₹{ret_result['required_sip']:,.0f}")
-            if ret_result.get("sip_comparison"):
-                st.markdown("**SIP Step-Up Comparison**")
-                st.dataframe(
-                    build_step_up_comparison_table(ret_result["sip_comparison"]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                st.caption(ret_result["sip_comparison"].get("note", ""))
 
-    edu_data = client_data["goals"]["education"]
-    edu_result = calculate_child_education_goal(
-        edu_data["cost"],
-        edu_data["years"],
-        expected_return_rate=projection_base_roi,
-        annual_sip_step_up=projection_topup_rate,
-    )
+                assumptions = []
+                if goal_result.get("inflation_rate") is not None:
+                    assumptions.append(
+                        f"Inflation: {float(goal_result.get('inflation_rate', 0.0)):.1%}"
+                    )
+                if goal_result.get("expected_return_rate") is not None:
+                    assumptions.append(
+                        f"ROI: {float(goal_result.get('expected_return_rate', 0.0)):.1%}"
+                    )
+                if assumptions:
+                    st.caption(" | ".join(assumptions))
 
-    with col2:
-        st.markdown(f"#### Education ({edu_result['years_to_goal']} Yrs)")
-        st.metric("Required Future Corpus", f"₹{edu_result['future_corpus']:,.0f}")
-        st.metric("Required Monthly SIP", f"₹{edu_result['required_sip']:,.0f}")
-        if edu_result.get("sip_comparison"):
-            st.markdown("**SIP Step-Up Comparison**")
-            st.dataframe(
-                build_step_up_comparison_table(edu_result["sip_comparison"]),
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.caption(edu_result["sip_comparison"].get("note", ""))
+                if goal_result.get("sip_comparison"):
+                    st.markdown("**SIP Step-Up Comparison**")
+                    st.dataframe(
+                        build_step_up_comparison_table(goal_result["sip_comparison"]),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    st.caption(goal_result["sip_comparison"].get("note", ""))
 
     # Projection + confidence sections are only available if the retirement goal was set.
     if ret_result is None or probability is None:
@@ -793,7 +1184,7 @@ def render_dashboard(client_data: dict):
                 annual_return_rate=projection_base_roi,
                 years=ret_result["years_to_goal"],
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         render_projection_chart(
@@ -961,7 +1352,7 @@ def render_dashboard(client_data: dict):
         render_assumptions_box(scenario_assumptions)
         st.dataframe(
             build_goal_horizon_table(scenarios),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -990,6 +1381,230 @@ def render_dashboard(client_data: dict):
     st.subheader("Interactive Scenario Builder")
     render_sip_calculator_widget(macro_context=macro_context)
 
+    goal_results_payload = goal_results
+    analysis_results = {
+        "risk": risk_profile,
+        "goals": goal_results_payload,
+        "portfolio": portfolio_analysis,
+        "portfolio_rebalancing": {
+            "gaps": gap_recommendations,
+            "fund_actions": fund_actions,
+        },
+        "allocation": allocation,
+        "insurance": insurance_gap,
+        "macro": macro_context,
+        "funds": recommended_funds,
+        "advanced_products": advanced_products,
+        "investment_mode_recommendation": investment_mode_recommendation,
+        "monte_carlo": {
+            "success_probability": probability,
+            "fix_recommendation": goal_fix_recommendation,
+        }
+        if probability is not None
+        else {},
+    }
+    proposal_draft_payload = {
+        "generated_at": datetime.now().isoformat(),
+        "risk_profile": risk_profile,
+        "goal_results": goal_results_payload,
+        "portfolio_health": portfolio_analysis,
+        "portfolio_rebalancing": {
+            "gaps": gap_recommendations,
+            "fund_actions": fund_actions,
+        },
+        "target_allocation": allocation,
+        "insurance_gap": insurance_gap,
+        "recommended_funds": recommended_funds,
+        "advanced_products": advanced_products,
+        "investment_mode_recommendation": investment_mode_recommendation,
+        "macro_context": macro_context,
+        "monte_carlo": {
+            "success_probability": probability,
+            "fix_recommendation": goal_fix_recommendation,
+        }
+        if probability is not None
+        else {},
+    }
+
+    st.markdown("---")
+    st.subheader("Proposal Review")
+    st.caption("System Draft is generated automatically. Advisor Final is the reviewed client-facing recommendation.")
+
+    selected_client_id = st.session_state.get("selected_client_id", "current")
+    saved_proposal = (
+        ((st.session_state.get("selected_client_record") or {}).get("analysis") or {}).get("proposal_draft")
+        or {}
+    )
+    saved_advisor_final = saved_proposal.get("advisor_final") or {}
+    saved_override_reason = saved_proposal.get("override_reason") or ""
+    system_risk_class = str(risk_profile.get("category", "Moderate"))
+    system_allocation_weights = dict(allocation.get("allocation", {}))
+    risk_key = _editor_key(selected_client_id, "risk_class")
+    reason_key = _editor_key(selected_client_id, "override_reason")
+
+    if risk_key not in st.session_state:
+        st.session_state[risk_key] = str(
+            saved_advisor_final.get("risk_class")
+            or saved_advisor_final.get("risk_profile", {}).get("category")
+            or system_risk_class
+        )
+    if reason_key not in st.session_state:
+        st.session_state[reason_key] = saved_override_reason
+    for asset_name, default_weight in system_allocation_weights.items():
+        asset_key = _allocation_input_key(selected_client_id, asset_name)
+        if asset_key not in st.session_state:
+            st.session_state[asset_key] = float(
+                (saved_advisor_final.get("allocation") or {}).get(
+                    asset_name,
+                    (saved_advisor_final.get("target_allocation", {}).get("allocation") or {}).get(
+                        asset_name,
+                        default_weight,
+                    ),
+                )
+            )
+
+    if st.button("Reset Advisor Final to System Draft", key=_editor_key(selected_client_id, "reset")):
+        st.session_state[risk_key] = system_risk_class
+        st.session_state[reason_key] = saved_override_reason
+        for asset_name, default_weight in system_allocation_weights.items():
+            st.session_state[_allocation_input_key(selected_client_id, asset_name)] = float(default_weight)
+        st.rerun()
+
+    system_col, final_col = st.columns(2)
+    with system_col:
+        st.markdown("#### System Draft")
+        st.metric("Risk Class", system_risk_class)
+        st.metric("Risk Score", f"{float(risk_profile.get('score', 0.0)):.1f} / 10")
+        st.markdown("**Allocation Recommendation**")
+        _render_allocation_summary(system_allocation_weights)
+
+    with final_col:
+        st.markdown("#### Advisor Final")
+        advisor_final_risk_class = st.selectbox(
+            "Final Risk Class",
+            ["Conservative", "Moderate", "Aggressive"],
+            key=risk_key,
+        )
+        st.markdown("**Final Allocation**")
+        advisor_final_allocation: dict[str, float] = {}
+        for asset_name in system_allocation_weights:
+            asset_key = _allocation_input_key(selected_client_id, asset_name)
+            advisor_final_allocation[asset_name] = float(
+                st.number_input(
+                    f"{asset_name} (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=0.5,
+                    key=asset_key,
+                )
+            )
+        override_reason_text = st.text_area(
+            "Override Reason",
+            key=reason_key,
+            help="Required before changing risk class or allocation from the system draft.",
+        )
+
+    risk_override_changed = advisor_final_risk_class != system_risk_class
+    allocation_override_changed = _allocations_differ(
+        system_allocation_weights,
+        advisor_final_allocation,
+    )
+    advisor_allocation_total = round(sum(advisor_final_allocation.values()), 2)
+    override_required = risk_override_changed or allocation_override_changed
+    override_reason_clean = override_reason_text.strip()
+
+    if abs(advisor_allocation_total - 100.0) > 0.1:
+        error_col, action_col = st.columns([3, 1])
+        error_col.error(
+            f"Advisor Final allocation must total 100%. Current total: {advisor_allocation_total:.2f}%."
+        )
+        if action_col.button("Auto-balance remaining", key=_editor_key(selected_client_id, "auto_balance")):
+            _auto_balance_allocations(
+                selected_client_id,
+                advisor_final_allocation,
+                system_allocation_weights,
+            )
+            st.rerun()
+    elif override_required and not override_reason_clean:
+        st.warning("Enter an override reason before saving changes to risk class or allocation.")
+    elif override_required:
+        st.info("Override reason captured. Both System Draft and Advisor Final will be stored.")
+    else:
+        st.success("Advisor Final currently matches the System Draft.")
+
+    advisor_final_payload = deepcopy(proposal_draft_payload)
+    advisor_final_payload["risk_class"] = advisor_final_risk_class
+    advisor_final_payload["risk_profile"] = {
+        **deepcopy(risk_profile),
+        "category": advisor_final_risk_class,
+        "override_reason": override_reason_clean or None,
+    }
+    advisor_final_payload["allocation"] = dict(advisor_final_allocation)
+    advisor_final_payload["target_allocation"] = {
+        **deepcopy(allocation),
+        "allocation": dict(advisor_final_allocation),
+        "override_applied": override_required,
+        "override_reason": override_reason_clean or "",
+    }
+    advisor_final_payload["advisor_review"] = {
+        "reviewed_by": st.session_state.get("advisor_name"),
+        "reviewed_role": st.session_state.get("advisor_role"),
+        "reviewed_at": datetime.now().isoformat(),
+        "override_reason": override_reason_clean or None,
+        "changed_fields": {
+            "risk_class": risk_override_changed,
+            "allocation": allocation_override_changed,
+        },
+    }
+
+    st.markdown("---")
+    st.subheader("Client Record")
+    if st.session_state.get("advisor_token") and st.session_state.get("selected_client_id"):
+        if st.button("Save to Client Record", width="stretch"):
+            if abs(advisor_allocation_total - 100.0) > 0.1:
+                st.error(
+                    f"Unable to save. Advisor Final allocation must total 100%. Current total: {advisor_allocation_total:.2f}%."
+                )
+                return
+            if override_required and not override_reason_clean:
+                st.error("Unable to save. Override reason is required when risk class or allocation changes.")
+                return
+            with st.spinner("Saving analysis to client record..."):
+                try:
+                    save_response = save_client_analysis_record(
+                        st.session_state["advisor_token"],
+                        int(st.session_state["selected_client_id"]),
+                        {
+                            "risk": risk_profile,
+                            "goals": goal_results_payload,
+                            "portfolio": portfolio_analysis,
+                            "proposal_draft": proposal_draft_payload,
+                            "advisor_final": advisor_final_payload,
+                            "override_reason": override_reason_clean or None,
+                            "proposal_status": "overridden" if override_required else "reviewed",
+                            "client_profile": client_data,
+                        },
+                    )
+                except APIClientError as exc:
+                    st.error(f"Unable to save client analysis: {exc}")
+                else:
+                    selected_record = dict(st.session_state.get("selected_client_record") or {})
+                    analysis_section = dict(selected_record.get("analysis") or {})
+                    analysis_section["proposal_draft"] = {
+                        "system_draft": proposal_draft_payload,
+                        "advisor_final": advisor_final_payload,
+                        "override_reason": override_reason_clean or None,
+                        "status": "overridden" if override_required else "reviewed",
+                        "created_at": save_response.get("saved_at"),
+                    }
+                    selected_record["analysis"] = analysis_section
+                    st.session_state["selected_client_record"] = selected_record
+                    st.success(
+                        f"Analysis saved to client record at {save_response.get('saved_at', 'now')}."
+                    )
+    else:
+        st.info("Client record saving is available after advisor login and client selection.")
+
     # Generate PDF Report
     st.markdown("---")
     st.subheader("Client Investment Proposal")
@@ -1014,47 +1629,50 @@ def render_dashboard(client_data: dict):
                 st.session_state["stale_pdf_confirmed"] = False
                 st.rerun()
         else:
-            with st.spinner("Generating proposal..."):
-                analysis_results = {
-                    "risk": risk_profile,
-                    "goals": [ret_result, edu_result],
-                    "portfolio": portfolio_analysis,
-                    "macro": macro_context,
-                    "funds": recommended_funds,
-                    "monte_carlo": {"success_probability": probability},
-                }
-
-                try:
-                    report_client_data = {
-                        **client_data,
-                        "monthly_savings": effective_monthly_savings,
-                    }
-                    pdf_bytes = generate_full_report(report_client_data, analysis_results)
-                    if pdf_bytes:
-                        st.download_button(
-                            label="📄 Download PDF Report",
-                            data=pdf_bytes,
-                            file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                            mime="application/pdf",
+            if generate_full_report is None:
+                st.error("Report generator unavailable — missing dependency.")
+            else:
+                with st.spinner("Generating proposal..."):
+                    try:
+                        report_client_data = {
+                            **client_data,
+                            "monthly_savings": effective_monthly_savings,
+                            "advisor_name": st.session_state.get("advisor_name"),
+                            "advisor_email": st.session_state.get("advisor_email"),
+                            "advisor_role": st.session_state.get("advisor_role"),
+                        }
+                        pdf_bytes = generate_full_report(
+                            report_client_data, analysis_results
                         )
-                    else:
-                        st.error("Report generation failed — no output returned.")
-                except Exception as e:
-                    st.error(f"Report generation error: {e}")
+                        if pdf_bytes:
+                            report_version = datetime.now().strftime("%Y%m%d%H%M%S")
+                            st.download_button(
+                                label="📄 Download PDF Report",
+                                data=pdf_bytes,
+                                file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                                mime="application/pdf",
+                            )
+                            _log_report_issued("detailed_report", report_version)
+                        else:
+                            _log_report_issue(
+                                "Detailed PDF generation returned no output.",
+                                {"report_type": "detailed_pdf"},
+                            )
+                            st.error("Report generation failed — no output returned.")
+                    except Exception as e:
+                        _log_report_issue(
+                            f"Detailed PDF generation error: {e}",
+                            {"report_type": "detailed_pdf"},
+                        )
+                        st.error(f"Report generation error: {e}")
             st.session_state["pending_pdf_generation"] = False
             st.session_state["stale_pdf_confirmed"] = False
 
     # --- Insurance Gap Analysis & Advisor Overrides (non-blocking) ---
-    try:
-        from backend.insurance.gap_analyzer import analyze_gap
-        insurance_gap = analyze_gap(client_data)
-    except Exception:
-        insurance_gap = {"life_gap": 0, "health_gap": 0, "status": "unavailable"}
-
     st.markdown("### 🛡️ Insurance Gap")
     try:
-        st.metric("Life Cover Gap", insurance_gap.get("life_gap", 0))
-        st.metric("Health Cover Gap", insurance_gap.get("health_gap", 0))
+        st.metric("Life Cover Gap", f"₹{insurance_gap.get('life_gap', 0):,.0f}")
+        st.metric("Health Cover Gap", f"₹{insurance_gap.get('health_gap', 0):,.0f}")
         if client_data.get("emi_total", 0) > 0:
             st.caption(
                 f"₹{client_data.get('emi_total', 0.0):,.0f}/month EMI deducted from savings capacity."
@@ -1062,45 +1680,93 @@ def render_dashboard(client_data: dict):
     except:
         st.write("Insurance data unavailable")
 
-    try:
-        from backend.api.advisor_overrides import apply_overrides
-        _current_alloc = allocation if isinstance(allocation, dict) else {}
-        allocation = apply_overrides(_current_alloc, client_data)
-        
-        override_applied = allocation.get("override_applied", False)
-        override_reason = allocation.get("override_reason", "")
-        if override_applied:
-            st.warning(f"Advisor Adjustment: {override_reason}")
-    except Exception:
-        pass
+    if override_applied:
+        st.warning(f"Advisor Adjustment: {override_reason}")
 
     st.markdown("---")
-    from backend.api.report_generator import generate_full_report
     if st.button("Download Advanced Report"):
         if critical_macro_fallback:
             st.warning(
                 "Live market data is stale. Use 'Generate Detailed PDF Report' to confirm report generation with cached data."
             )
+        elif generate_full_report is None:
+            st.error("Report generator unavailable — missing dependency.")
         else:
             with st.spinner("Generating report..."):
                 try:
                     report_client_data = {
                         **client_data,
                         "monthly_savings": effective_monthly_savings,
+                        "advisor_name": st.session_state.get("advisor_name"),
+                        "advisor_email": st.session_state.get("advisor_email"),
+                        "advisor_role": st.session_state.get("advisor_role"),
                     }
-                    pdf_bytes = generate_full_report(report_client_data, {
-                        "risk": risk_profile,
-                        "allocation": allocation,
-                        "insurance": insurance_gap
-                    })
+                    pdf_bytes = generate_full_report(
+                        report_client_data,
+                        {
+                            **analysis_results,
+                            "insurance": insurance_gap,
+                        },
+                    )
                     if pdf_bytes:
+                        report_version = datetime.now().strftime("%Y%m%d%H%M%S")
                         st.download_button(
                             label="📄 Download PDF Report",
                             data=pdf_bytes,
                             file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
                             mime="application/pdf"
                         )
+                        _log_report_issued("advanced_report", report_version)
                     else:
+                        _log_report_issue(
+                            "Advanced report generation returned no output.",
+                            {"report_type": "advanced_report"},
+                        )
                         st.error("Report generation failed — no output returned.")
                 except Exception as e:
+                    _log_report_issue(
+                        f"Advanced report generation error: {e}",
+                        {"report_type": "advanced_report"},
+                    )
                     st.error(f"Report generation error: {e}")
+
+    st.markdown("---")
+    st.subheader("Shareable Advisor Deck")
+    if st.button("Generate Advisor Deck PDF"):
+        if generate_proposal_deck_report is None:
+            st.error("Report generator unavailable — missing dependency.")
+        else:
+            with st.spinner("Generating advisor deck..."):
+                try:
+                    deck_client_data = {
+                        **client_data,
+                        "monthly_savings": effective_monthly_savings,
+                        "advisor_name": st.session_state.get("advisor_name"),
+                        "advisor_email": st.session_state.get("advisor_email"),
+                        "advisor_role": st.session_state.get("advisor_role"),
+                    }
+                    deck_bytes = generate_proposal_deck_report(
+                        deck_client_data,
+                        analysis_results,
+                    )
+                    if deck_bytes:
+                        report_version = datetime.now().strftime("%Y%m%d%H%M%S")
+                        st.download_button(
+                            label="📊 Download Advisor Deck",
+                            data=deck_bytes,
+                            file_name=f"advisor_deck_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                        )
+                        _log_report_issued("advisor_deck", report_version)
+                    else:
+                        _log_report_issue(
+                            "Advisor deck generation returned no output.",
+                            {"report_type": "advisor_deck"},
+                        )
+                        st.error("Advisor deck generation failed — no output returned.")
+                except Exception as e:
+                    _log_report_issue(
+                        f"Advisor deck generation error: {e}",
+                        {"report_type": "advisor_deck"},
+                    )
+                    st.error(f"Advisor deck generation error: {e}")

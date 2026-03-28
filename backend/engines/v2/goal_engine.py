@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from backend.engines.v1.goal_engine import (
@@ -18,6 +19,69 @@ from backend.utils.future_value import calculate_future_value
 from backend.utils.sip_calculator import calculate_required_sip
 
 _POST_RETIREMENT_RETURN_RATE = 0.07
+
+
+@dataclass(frozen=True)
+class GoalConfig:
+    label: str
+    required_inputs: list[str]
+    description: str = ""
+    optional_inputs: list[str] = field(default_factory=list)
+
+
+GOAL_CONFIGS: Dict[str, GoalConfig] = {
+    GoalType.RETIREMENT.value: GoalConfig(
+        label="Retirement",
+        required_inputs=["current_monthly_expense", "retirement_age"],
+        optional_inputs=[
+            "include_post_retirement_income",
+            "post_retirement_income",
+            "post_retirement_years",
+        ],
+        description="Inflation-adjusted retirement corpus with optional income sustainability planning.",
+    ),
+    GoalType.CHILD_EDUCATION.value: GoalConfig(
+        label="Child Education",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Education corpus planning with higher education inflation assumptions.",
+    ),
+    GoalType.CHILD_MARRIAGE.value: GoalConfig(
+        label="Child Marriage",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Future-value planning for marriage expenses.",
+    ),
+    GoalType.HOUSE_PURCHASE.value: GoalConfig(
+        label="House Purchase",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Home purchase corpus planning with property inflation assumptions.",
+    ),
+    GoalType.VEHICLE_PURCHASE.value: GoalConfig(
+        label="Vehicle Purchase",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Vehicle purchase planning with moderate asset inflation assumptions.",
+    ),
+    GoalType.VACATION.value: GoalConfig(
+        label="Vacation",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Lifestyle goal planning for travel and experiences.",
+    ),
+    GoalType.WEALTH_CREATION.value: GoalConfig(
+        label="Wealth Creation",
+        required_inputs=["target_amount", "years_to_goal"],
+        description="Long-term target corpus accumulation.",
+    ),
+    GoalType.EMERGENCY_FUND.value: GoalConfig(
+        label="Emergency Fund",
+        required_inputs=["monthly_expenses", "months_of_coverage"],
+        description="Liquidity reserve sized to a target number of months.",
+    ),
+    GoalType.CUSTOM.value: GoalConfig(
+        label="Custom Goal",
+        required_inputs=["goal_name", "target_amount", "years_to_goal"],
+        optional_inputs=["custom_inflation"],
+        description="Flexible goal definition with optional custom inflation.",
+    ),
+}
 
 
 def calculate_post_retirement_income_corpus(
@@ -230,6 +294,7 @@ def calculate_goal_by_type(
     goal_type: str, payload: Dict[str, Any], expected_return_rate: float
 ) -> Dict[str, Any]:
     normalized = str(goal_type).strip().lower()
+    annual_sip_step_up = float(payload.get("annual_sip_step_up", 0.0) or 0.0)
     present_cost = float(
         payload.get("present_cost", payload.get("target_amount", payload.get("cost", 0.0)))
     )
@@ -247,6 +312,7 @@ def calculate_goal_by_type(
             include_post_retirement_income=bool(
                 payload.get("include_post_retirement_income", False)
             ),
+            annual_sip_step_up=annual_sip_step_up,
         )
     if normalized == GoalType.CHILD_EDUCATION.value:
         return calculate_child_education_goal(
@@ -255,32 +321,39 @@ def calculate_goal_by_type(
             expected_return_rate=expected_return_rate,
             current_age=payload.get("current_age"),
             child_age=payload.get("child_age"),
+            annual_sip_step_up=annual_sip_step_up,
         )
     if normalized == GoalType.CHILD_MARRIAGE.value:
-        return calculate_child_marriage_goal(
+        result = calculate_child_marriage_goal(
             present_cost, years_to_goal, expected_return_rate
         )
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
     if normalized == GoalType.HOUSE_PURCHASE.value:
-        return calculate_house_purchase_goal(
+        result = calculate_house_purchase_goal(
             present_cost, years_to_goal, expected_return_rate
         )
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
     if normalized == GoalType.VEHICLE_PURCHASE.value:
-        return calculate_vehicle_purchase_goal(
+        result = calculate_vehicle_purchase_goal(
             present_cost, years_to_goal, expected_return_rate
         )
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
     if normalized == GoalType.VACATION.value:
-        return calculate_vacation_goal(present_cost, years_to_goal, expected_return_rate)
+        result = calculate_vacation_goal(present_cost, years_to_goal, expected_return_rate)
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
     if normalized == GoalType.WEALTH_CREATION.value:
-        return calculate_wealth_creation_goal(
+        result = calculate_wealth_creation_goal(
             present_cost, years_to_goal, expected_return_rate
         )
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
     if normalized == GoalType.EMERGENCY_FUND.value:
-        return calculate_emergency_fund_goal(
+        result = calculate_emergency_fund_goal(
             monthly_expenses=float(payload.get("monthly_expenses", present_cost)),
             months_of_coverage=int(payload.get("months_of_coverage", 6)),
             expected_return_rate=expected_return_rate,
         )
-    return calculate_custom_goal(
+        return calculate_goal_with_sip_topup(result, annual_sip_step_up)
+    result = calculate_custom_goal(
         goal_name=str(payload.get("goal_name", "Custom Goal")),
         present_cost=present_cost,
         years_to_goal=years_to_goal,
@@ -288,3 +361,10 @@ def calculate_goal_by_type(
         goal_type=normalized or GoalType.CUSTOM.value,
         custom_inflation=payload.get("custom_inflation"),
     )
+    return calculate_goal_with_sip_topup(result, annual_sip_step_up)
+
+
+def calculate_goal(
+    goal_type: str, payload: Dict[str, Any], expected_return_rate: float
+) -> Dict[str, Any]:
+    return calculate_goal_by_type(goal_type, payload, expected_return_rate)

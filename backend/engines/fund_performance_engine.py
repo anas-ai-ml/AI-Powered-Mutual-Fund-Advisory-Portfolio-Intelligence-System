@@ -85,7 +85,12 @@ def get_category_performance() -> dict:
             daily_returns = prices.pct_change().dropna()
 
             # Annualized Volatility (assuming 252 trading days)
-            annual_volatility = float(daily_returns.std() * np.sqrt(252)) * 100
+            std_value = daily_returns.std()
+            annual_volatility = (
+                float(std_value.iloc[0] if hasattr(std_value, "iloc") else std_value)
+                * np.sqrt(252)
+                * 100
+            )
 
             # Sharpe Ratio
             if annual_volatility > 0:

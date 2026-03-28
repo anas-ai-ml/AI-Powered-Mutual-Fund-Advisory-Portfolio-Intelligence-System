@@ -2,31 +2,31 @@
   "macro": {
     "cpi_yoy_pct": 6.0,
     "repo_rate_pct": 6.5,
-    "bond_yield_pct": 24.64,
+    "bond_yield_pct": 26.8,
     "inflation_trend": "stable",
     "rate_trend": "stable",
     "source": "partial",
-    "fetched_at": "2026-03-26T18:28:32",
+    "fetched_at": "2026-03-28T13:22:11",
     "data_points": {
       "cpi_yoy_pct": {
         "value": 6.0,
         "source": "fallback",
-        "fetched_at": "2026-03-26T18:28:32",
+        "fetched_at": "2026-03-28T13:22:11",
         "is_fallback": true
       },
       "repo_rate_pct": {
         "value": 6.5,
         "source": "fallback",
-        "fetched_at": "2026-03-26T18:28:32",
+        "fetched_at": "2026-03-28T13:22:11",
         "is_fallback": true
       },
       "bond_yield_pct": {
-        "value": 24.64,
+        "value": 26.8,
         "source": "FRED/yfinance",
-        "fetched_at": "2026-03-26T18:28:32",
+        "fetched_at": "2026-03-28T13:22:11",
         "is_fallback": false
       }
     }
   },
-  "cached_at": "2026-03-26T18:29:15"
+  "cached_at": "2026-03-28T13:22:54"
 }

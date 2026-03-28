@@ -1,164 +1,170 @@
 # AI-Powered Mutual Fund Advisory & Portfolio Intelligence System
 
-An institutional-grade, AI-driven financial planning and portfolio intelligence engine. This system combines Modern Portfolio Theory (MPT), Monte Carlo simulations, and real-time macroeconomic signals to deliver personalized, goal-oriented investment strategies.
+An institutional-grade, AI-driven financial planning and portfolio intelligence engine. This system integrates Modern Portfolio Theory (MPT), Monte Carlo simulations, and real-time macroeconomic signals to deliver personalized, goal-oriented investment strategies.
 
 ---
 
-## 🚀 Vision
-To democratize high-end financial advisory by providing a quant-native, transparent, and AI-orchestrated platform that handles everything from risk profiling to dynamic asset reallocation and automated fund selection.
+## Technical Overview
 
-## 🧠 Core Intelligence Modules
+The system is designed as a distributed intelligence platform, utilizing a multi-layered architecture to process user profiles, market signals, and fund performance data. Version 2.0 introduces a centralized engine routing system, expanded financial goal types, and a market-aware investment deployment logic.
 
-### 1. Risk Intelligence Engine (`risk_engine`)
-- **Multi-Factor Profiling**: Analyzes age, dependents, behavioral traits, income, and savings capacity.
-- **XAI (Explainable AI)**: Provides a granular breakdown of why a specific risk score (0-10) was assigned.
-- **Dynamic Allocation Mapping**: Converts risk scores into baseline MPT-optimized asset weights.
+## System Architecture
 
-### 2. Goal Optimization Engine (`goal_engine`)
-- **Lifecycle Modeling**: Specialized calculators for Retirement, Child Education, Wealth Creation, and Emergency Funds.
-- **Inflation-Adjusted Projections**: Uses real-time CPI data to ensure future purchasing power is maintained.
-- **Step-up SIP Logic**: Recommends incremental investment increases to meet ambitious targets.
+### Distributed Intelligence Flow
+The following diagram illustrates the data flow from user input to the final intelligence report, highlighting the interaction between the core engines and the asynchronous AI intelligence layer.
 
-### 3. Portfolio Intelligence (`portfolio_engine`)
-- **Health Diagnostics**: Detects "Cash Drag", over-concentration in FDs, and gold overallocation.
-- **Diversification Scoring**: Quantifies how well a portfolio is spread across asset classes.
-- **Gap Analysis**: Identifies mismatches between user risk profile and actual current holdings.
-
-### 4. Adaptive Allocation Layer (`ai_layer`)
-- **Macro-Aware Rebalancing**: Adjusts equity/debt/gold weights based on live signals (Inflation, Repo Rate, Bond Yields).
-- **Rule-Based Deltas**: Uses a sophisticated rule engine (`allocation_rules.py`) to tilt the portfolio towards safety or growth.
-
-### 5. Fund Recommendation Pipe (`recommendation_engine`)
-- **Multi-Factor Scoring**: Ranks 2000+ mutual funds based on 1y/3y/5y returns, volatility, AUM, and Expense Ratio.
-- **Dynamic Filtering**: Only suggests funds that match the target category and risk profile.
-
----
-
-## 🏗 System Architecture
-
-### High-Level System Flow
 ```mermaid
 graph TD
-    classDef user fill:#f9f,stroke:#333,stroke-width:2px
-    classDef engine fill:#bbf,stroke:#333,stroke-width:2px
-    classDef ai fill:#dfd,stroke:#333,stroke-width:2px
-    classDef data fill:#ffd,stroke:#333,stroke-width:2px
+    classDef user fill:#2c3e50,color:#fff,stroke:#34495e,stroke-width:2px
+    classDef engine fill:#34495e,color:#fff,stroke:#2c3e50,stroke-width:1px
+    classDef ai fill:#16a085,color:#fff,stroke:#1abc9c,stroke-width:2px
+    classDef data fill:#7f8c8d,color:#fff,stroke:#95a5a6,stroke-width:1px
 
-    User((User Input)):::user --> |JSON Profile| API[FastAPI Backend]:::engine
-    API --> RiskEngine[Risk Scoring Service]:::engine
-    API --> GoalEngine[Goal Computation Service]:::engine
+    User((User Profile Input)):::user --> |REST API| API[FastAPI Gateway]:::engine
     
+    subgraph Core_Engines_v2
+        API --> RiskEngine[Risk Intelligence v2]:::engine
+        API --> GoalEngine[Goal Optimization v2]:::engine
+        API --> ModeEngine[Investment Mode Engine]:::engine
+    end
+
     subgraph AI_Intelligence_Layer
-        SignalAgent[Signal Agent]:::ai --> |Market Trends| AdaptiveAlloc[Adaptive Allocation Engine]:::ai
+        direction TB
+        SignalAgent[Signal Agent]:::ai --> |Macro Trends| AdaptiveAlloc[Adaptive Allocation Engine]:::ai
+        PredictionAgent[Prediction Agent]:::ai --> |Market Forecast| AdaptiveAlloc
         DecisionAgent[Decision Agent]:::ai --> |Portfolio Tilt| AdaptiveAlloc
     end
 
     RiskEngine --> AdaptiveAlloc
     AdaptiveAlloc --> RecoEngine[Fund Recommendation Engine]:::engine
     
-    subgraph Data_Pipe
+    subgraph Ingestion_Pipe
         AMFI[AMFI NAVs]:::data --> RecoEngine
         FRED[FRED Macro Data]:::data --> SignalAgent
         FBIL[FBIL Repo Rates]:::data --> SignalAgent
     end
 
-    RecoEngine --> Dashboard[Streamlit Intelligence Terminal]:::user
-    Dashboard --> PDF[WeasyPrint Report Generator]:::engine
+    RecoEngine --> Terminal[Streamlit Intelligence Terminal]:::user
+    Terminal --> PDF[Institutional Report Generator]:::engine
 ```
 
-### AI Agent Orchestration
+### Async Agent Orchestration
+AI agents operate in a decoupled environment via Celery workers, ensuring high availability and market responsiveness.
+
 ```mermaid
 sequenceDiagram
     participant W as Celery Worker
     participant S as Signal Agent
     participant P as Prediction Agent
     participant D as Decision Agent
-    participant DB as Redis/Cache
+    participant Cache as Redis Service
 
-    W ->> S: Fetch Macro Data (FRED/FBIL)
-    S ->> DB: Store Live Signals
-    W ->> P: Run Prediction Models (GBM/RF)
-    P ->> DB: Store Market Forecast
-    W ->> D: Apply Adaptive Rules
-    D ->> DB: Store Final Allocation Deltas
-    Note over W,DB: Periodic sync every 12 hours
+    W ->> Cache: Poll for fresh market data
+    Cache -->> S: Return FRED/FBIL signals
+    S ->> Cache: Update Market Stability Score
+    W ->> P: Execute GBM / Random Forest Models
+    P ->> Cache: Update Growth Forecasts
+    W ->> D: Apply Allocation Deltas (v2 Rules)
+    D ->> Cache: Finalize Portfolio Tilt
+    Note over W,Cache: Periodic synchronization every 12 hours
 ```
 
 ---
 
-## 📊 Mathematical Foundations
-- **Modern Portfolio Theory (MPT)**: Initial asset allocation optimized for the efficient frontier based on user risk.
-- **Monte Carlo Simulations**: Runs 1000+ iterations to determine the "Probability of Success" for financial goals.
-- **Geometric Brownian Motion (GBM)**: Used by prediction agents to forecast potential market trajectories.
-- **Inflation Indexing**: Continuous adjustment of goal targets using the latest CPI (YoY) data.
+## Core Intelligence Modules
+
+### 1. Risk Intelligence Engine (v2.0)
+The Risk Engine performs multi-factor profiling to quantify a user's risk tolerance.
+- **Factor Analysis**: Evaluates age-based risk capacity, dependency ratios, and behavioral traits.
+- **XAI (Explainable AI)**: Provides a granular breakdown of score contributions, ensuring transparency in the advisory process.
+- **Behavioral Normalization**: Maps qualitative inputs to quantitative risk vectors (0.0 - 10.0).
+
+### 2. Goal Optimization Engine (v2.0)
+A comprehensive planning module supporting lifecycle-specific financial targets.
+- **Expanded Goal Types**: Includes Retirement, Child Education, Marriage, Real Estate Purchase, and Emergency Funds.
+- **Sustainability Planning**: Retirement modual includes post-retirement income planning via annuity corpus and withdrawal rate calculations.
+- **SIP Step-Up Logic**: Recommends incremental investment increases (top-ups) to align with long-term inflation-adjusted targets.
+
+### 3. Investment Mode Engine (v2.0)
+A market-aware module that recommends the optimal deployment strategy based on current stability scores and valuation metrics.
+- **Deployment Strategies**: Recommends SIP, Lumpsum, STP (Systematic Transfer Plan), or SWP (Systematic Withdrawal Plan).
+- **Valuation Guardrails**: Analyzes Nifty P/E and VIX levels to prevent aggressive deployment during market peaks.
+
+### 4. Adaptive Allocation Layer
+Adjusts model portfolio weights based on live macroeconomic signals (Inflation, Repo Rate, Bond Yields).
+- **Macro-Aware Rebalancing**: Tilts asset weights between Equity, Debt, and Gold to mitigate systemic risk.
+- **Feature-Flag Control**: Engine routing is handled via `config.py`, allowing for seamless switching between v1 logic and advanced v2 modules.
 
 ---
 
-## 🛠 Tech Stack
-- **Frontend**: Streamlit (Reactive UI), Plotly (Interactive Charts)
-- **Backend**: FastAPI (Async API), Celery (Distributed Tasks)
-- **Database/Cache**: Redis (Agent state), JSON/CSV (Local storage)
-- **Data Science**: Pandas, NumPy, Scikit-learn, yfinance
-- **Reporting**: WeasyPrint (HTML-to-PDF)
+## Mathematical Foundations
+
+- **Modern Portfolio Theory (MPT)**: Baseline asset allocation optimized for the efficient frontier relative to the user's risk profile.
+- **Monte Carlo Simulations**: Executes 1,000+ iterations to determine the "Probability of Success" for financial goals.
+- **Geometric Brownian Motion (GBM)**: Utilized by prediction agents to forecast potential market trajectories and asset class performance.
+- **Inflation Indexing**: Continuous adjustment of goal targets using the latest Consumer Price Index (CPI) data.
 
 ---
 
-## ⚙️ Setup & Installation
+## Technical Stack
+
+- **Backend**: FastAPI (Asynchronous Gateway), Celery (Distributed Processing)
+- **Frontend**: Streamlit (Reactive Intelligence Terminal), Plotly (Interactive Analytics)
+- **Data Layer**: Redis (Agent State Management), PostgreSQL/JSON (Persistent Storage)
+- **Quantitative Libraries**: Pandas, NumPy, Scikit-learn, SciPy, yfinance
+- **Reporting**: WeasyPrint (Institutional PDF Generation)
+
+---
+
+## Installation and Configuration
 
 ### Prerequisites
-- Python 3.10+
-- Redis (for Celery workers)
+- Python 3.10 or higher
+- Redis Service (for Celery and Caching)
 
-### 1. Clone & Install
-```bash
-git clone <repo-url>
-cd mutual-fund-advisory
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+### Setup
+1. **Repository Setup**:
+   ```bash
+   git clone <repository-url>
+   cd mutual-fund-advisory
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-### 2. Environment Configuration
-Create a `config.py` or `.env` with:
-```python
-ENABLE_ADAPTIVE_ALLOCATION = True
-FETCH_LIVE_MACRO = True
-CELERY_BROKER_URL = "redis://localhost:6373/0"
-```
+2. **Configuration**:
+   Modify `config.py` to enable v2 feature flags:
+   ```python
+   FEATURE_FLAGS = {
+       "v2_risk_explanation": True,
+       "advanced_goal_types": True,
+       "investment_mode_recommendation": True,
+       "advanced_products": False
+   }
+   ```
 
-### 3. Run the Services
-**Start Backend:**
-```bash
-uvicorn backend.main:app --reload
-```
-**Start Worker (Optional):**
-```bash
-celery -A ai_agents.worker worker --loglevel=info
-```
-**Start Frontend:**
-```bash
-streamlit run frontend/app.py
-```
+3. **Service Execution**:
+   - **Backend**: `uvicorn backend.main:app --reload`
+   - **Worker**: `celery -A ai_agents.tasks worker --loglevel=info`
+   - **Frontend**: `streamlit run frontend/app.py`
 
 ---
 
-## 📁 Directory Structure
+## Repository Structure
+
 ```text
-├── ai_agents/          # Celery workers & specialized AI agents
-├── ai_layer/           # Core signal processing & adaptive logic
+├── ai_agents/          # Celery workers and multi-agent orchestration
+├── ai_layer/           # Signal processing and adaptive allocation logic
 ├── backend/            
-│   ├── engines/        # Mathematical & Financial calculators
-│   ├── main.py         # Primary API entry point
-│   └── models/         # Pydantic data schemas
-├── frontend/           # Streamlit application & UI components
-├── data/               # Cached market and fund data
-└── tests/              # Comprehensive test suite
+│   ├── engines/        # Mathematical engines (v1/v2 versioned structure)
+│   ├── api/            # REST endpoints and controllers
+│   └── models/         # Pydantic core data schemas
+├── frontend/           # Streamlit application and UI component library
+├── data/               # Persistent storage and market caches
+└── tests/              # Institutional-grade test suite
 ```
 
 ---
 
-## ⚖️ Disclaimer
-This system is for educational and informational purposes only. Investment in mutual funds is subject to market risks. Please consult a SEBI-registered advisor before making any financial decisions. See `DISCLAIMER.txt` for full details.
-
----
-*Built with ❤️ for AI-Powered Financial Intelligence.*
+## Disclaimer
+This system is for educational and research purposes. Investment in mutual funds is subject to market risks. Users should consult a qualified financial advisor before making any investment decisions.

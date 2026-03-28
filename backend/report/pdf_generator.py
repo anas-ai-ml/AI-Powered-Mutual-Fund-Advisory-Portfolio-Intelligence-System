@@ -16,6 +16,7 @@ def generate_financial_report(
     goals: list,
     allocation_data: dict,
     portfolio_data: dict,
+    portfolio_rebalancing: dict,
     insurance_data: dict,
     macro_data: dict,
     funds: list,
@@ -67,6 +68,7 @@ def generate_financial_report(
         goals=goals,
         allocation=allocation_data,
         portfolio=portfolio_data,
+        portfolio_rebalancing=portfolio_rebalancing,
         insurance=insurance_data,
         macro=macro_data,
         funds=funds,
@@ -79,5 +81,33 @@ def generate_financial_report(
     )
 
     # 5. Generate PDF
+    HTML(string=html_out).write_pdf(output_path)
+    return output_path
+
+
+def generate_proposal_deck_pdf(
+    deck_data: dict,
+    output_path: str = "proposal_deck.pdf",
+):
+    """
+    Generates a presentation-style advisor deck PDF using a dedicated Jinja template.
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    env = Environment(loader=FileSystemLoader(current_dir))
+    template = env.get_template("proposal_deck.html")
+
+    disclaimer_path = os.path.join(current_dir, "..", "..", "DISCLAIMER.txt")
+    try:
+        with open(disclaimer_path, "r", encoding="utf-8") as f:
+            disclaimer_text = f.read()
+    except FileNotFoundError:
+        disclaimer_text = "Market performance is not guaranteed. Please consult a qualified advisor."
+
+    html_out = template.render(
+        today=datetime.now().strftime("%d %b %Y"),
+        deck=deck_data,
+        disclaimer=disclaimer_text,
+    )
+
     HTML(string=html_out).write_pdf(output_path)
     return output_path
