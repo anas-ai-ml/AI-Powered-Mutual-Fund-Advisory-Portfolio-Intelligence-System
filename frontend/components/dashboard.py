@@ -341,39 +341,49 @@ def _render_allocation_summary(allocation_weights: dict) -> None:
         st.markdown(f"- **{asset_name}**: {float(weight):.2f}%")
 
 
+def _build_report_filename(client_data: dict, prefix: str) -> str:
+    raw_name = (
+        client_data.get("name")
+        or client_data.get("client_name")
+        or client_data.get("contact")
+        or "client"
+    )
+    slug = "".join(char.lower() if char.isalnum() else "_" for char in str(raw_name)).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return f"{prefix}_{slug or 'client'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+
 def _auto_balance_allocations(
     client_id: int | str,
     advisor_allocation: dict,
     system_allocation: dict,
 ) -> None:
-    allocation_keys = list(advisor_allocation.keys())
-    current_total = float(sum(float(advisor_allocation.get(key, 0.0)) for key in allocation_keys))
+    total = sum(advisor_allocation.values())
+    remaining = 100.0 - total
 
+    if abs(remaining) < 0.01:
+        return
+
+    asset_names = list(advisor_allocation.keys())
+    n = len(asset_names)
+
+    if n == 0:
+        return
+
+    current_total = sum(advisor_allocation.values())
     if current_total > 0:
         normalized = {
-            asset_name: round((float(advisor_allocation.get(asset_name, 0.0)) / current_total) * 100.0, 2)
-            for asset_name in allocation_keys
+            k: round((v / current_total) * 100, 2)
+            for k, v in advisor_allocation.items()
         }
     else:
-        system_total = float(sum(float(system_allocation.get(key, 0.0)) for key in allocation_keys))
-        if system_total > 0:
-            normalized = {
-                asset_name: round((float(system_allocation.get(asset_name, 0.0)) / system_total) * 100.0, 2)
-                for asset_name in allocation_keys
-            }
-        else:
-            equal_weight = round(100.0 / len(allocation_keys), 2) if allocation_keys else 0.0
-            normalized = {asset_name: equal_weight for asset_name in allocation_keys}
+        per = round(100.0 / n, 2)
+        normalized = {k: per for k in asset_names}
 
-    running_total = 0.0
-    for idx, asset_name in enumerate(allocation_keys):
-        asset_key = _allocation_input_key(client_id, asset_name)
-        if idx == len(allocation_keys) - 1:
-            st.session_state[asset_key] = round(max(0.0, 100.0 - running_total), 2)
-        else:
-            weight = float(normalized.get(asset_name, 0.0))
-            st.session_state[asset_key] = weight
-            running_total += weight
+    st.session_state["_pending_allocation_balance"] = normalized
+    st.session_state["_pending_allocation_client"] = client_id
+    st.rerun()
 
 
 def _build_current_portfolio_payload(client_data: dict) -> dict:
@@ -1442,6 +1452,17 @@ def render_dashboard(client_data: dict):
     risk_key = _editor_key(selected_client_id, "risk_class")
     reason_key = _editor_key(selected_client_id, "override_reason")
 
+    # Apply pending auto-balance before widgets render
+    pending = st.session_state.pop("_pending_allocation_balance", None)
+    pending_client = st.session_state.pop("_pending_allocation_client", None)
+    if pending and pending_client == selected_client_id:
+        for asset_name, weight in pending.items():
+            asset_key = (
+                f"proposal_editor_{selected_client_id}_alloc_"
+                f"{asset_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_')}"
+            )
+            st.session_state[asset_key] = weight
+
     if risk_key not in st.session_state:
         st.session_state[risk_key] = str(
             saved_advisor_final.get("risk_class")
@@ -1616,24 +1637,33 @@ def render_dashboard(client_data: dict):
         if ret_result is None or probability is None:
             st.info("Set a retirement goal to generate the PDF proposal.")
             st.session_state["pending_pdf_generation"] = False
-        elif critical_macro_fallback and not st.session_state.get("stale_pdf_confirmed"):
-            st.warning(
-                "Live market data is stale. Generate report with cached data?"
-            )
-            confirm_col1, confirm_col2 = st.columns(2)
-            if confirm_col1.button("Proceed", key="confirm_stale_pdf"):
-                st.session_state["stale_pdf_confirmed"] = True
-                st.rerun()
-            if confirm_col2.button("Wait for Live Data", key="cancel_stale_pdf"):
-                st.session_state["pending_pdf_generation"] = False
-                st.session_state["stale_pdf_confirmed"] = False
-                st.rerun()
         else:
             if generate_full_report is None:
                 st.error("Report generator unavailable — missing dependency.")
             else:
                 with st.spinner("Generating proposal..."):
                     try:
+                        report_context = dict(analysis_results)
+                        if critical_macro_fallback:
+                            critical_fetch_times = [
+                                _parse_iso_timestamp(item.get("fetched_at"))
+                                for item in (live_inflation_meta, live_repo_meta, vix_meta)
+                                if item.get("fetched_at")
+                            ]
+                            oldest_fetch_time = (
+                                min(critical_fetch_times).strftime("%Y-%m-%d %H:%M")
+                                if critical_fetch_times
+                                else "timestamp unavailable"
+                            )
+                            st.warning(
+                                "⚠️ Report generated using cached macro data "
+                                f"(last updated: {oldest_fetch_time}). "
+                                "Live data was unavailable at time of generation.",
+                                icon="⚠️",
+                            )
+                            report_context["data_freshness_note"] = (
+                                "Macro data cached — live fetch unavailable at generation time."
+                            )
                         report_client_data = {
                             **client_data,
                             "monthly_savings": effective_monthly_savings,
@@ -1642,14 +1672,14 @@ def render_dashboard(client_data: dict):
                             "advisor_role": st.session_state.get("advisor_role"),
                         }
                         pdf_bytes = generate_full_report(
-                            report_client_data, analysis_results
+                            report_client_data, report_context
                         )
                         if pdf_bytes:
                             report_version = datetime.now().strftime("%Y%m%d%H%M%S")
                             st.download_button(
                                 label="📄 Download PDF Report",
                                 data=pdf_bytes,
-                                file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                                file_name=_build_report_filename(client_data, "financial_report"),
                                 mime="application/pdf",
                             )
                             _log_report_issued("detailed_report", report_version)
@@ -1666,7 +1696,6 @@ def render_dashboard(client_data: dict):
                         )
                         st.error(f"Report generation error: {e}")
             st.session_state["pending_pdf_generation"] = False
-            st.session_state["stale_pdf_confirmed"] = False
 
     # --- Insurance Gap Analysis & Advisor Overrides (non-blocking) ---
     st.markdown("### 🛡️ Insurance Gap")
@@ -1685,15 +1714,35 @@ def render_dashboard(client_data: dict):
 
     st.markdown("---")
     if st.button("Download Advanced Report"):
-        if critical_macro_fallback:
-            st.warning(
-                "Live market data is stale. Use 'Generate Detailed PDF Report' to confirm report generation with cached data."
-            )
-        elif generate_full_report is None:
+        if generate_full_report is None:
             st.error("Report generator unavailable — missing dependency.")
         else:
             with st.spinner("Generating report..."):
                 try:
+                    report_context = {
+                        **analysis_results,
+                        "insurance": insurance_gap,
+                    }
+                    if critical_macro_fallback:
+                        critical_fetch_times = [
+                            _parse_iso_timestamp(item.get("fetched_at"))
+                            for item in (live_inflation_meta, live_repo_meta, vix_meta)
+                            if item.get("fetched_at")
+                        ]
+                        oldest_fetch_time = (
+                            min(critical_fetch_times).strftime("%Y-%m-%d %H:%M")
+                            if critical_fetch_times
+                            else "timestamp unavailable"
+                        )
+                        st.warning(
+                            "⚠️ Report generated using cached macro data "
+                            f"(last updated: {oldest_fetch_time}). "
+                            "Live data was unavailable at time of generation.",
+                            icon="⚠️",
+                        )
+                        report_context["data_freshness_note"] = (
+                            "Macro data cached — live fetch unavailable at generation time."
+                        )
                     report_client_data = {
                         **client_data,
                         "monthly_savings": effective_monthly_savings,
@@ -1703,17 +1752,14 @@ def render_dashboard(client_data: dict):
                     }
                     pdf_bytes = generate_full_report(
                         report_client_data,
-                        {
-                            **analysis_results,
-                            "insurance": insurance_gap,
-                        },
+                        report_context,
                     )
                     if pdf_bytes:
                         report_version = datetime.now().strftime("%Y%m%d%H%M%S")
                         st.download_button(
                             label="📄 Download PDF Report",
                             data=pdf_bytes,
-                            file_name=f"financial_report_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            file_name=_build_report_filename(client_data, "financial_report"),
                             mime="application/pdf"
                         )
                         _log_report_issued("advanced_report", report_version)
@@ -1754,7 +1800,7 @@ def render_dashboard(client_data: dict):
                         st.download_button(
                             label="📊 Download Advisor Deck",
                             data=deck_bytes,
-                            file_name=f"advisor_deck_{client_data.get('marital_status', 'client').lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            file_name=_build_report_filename(client_data, "advisor_deck"),
                             mime="application/pdf",
                         )
                         _log_report_issued("advisor_deck", report_version)

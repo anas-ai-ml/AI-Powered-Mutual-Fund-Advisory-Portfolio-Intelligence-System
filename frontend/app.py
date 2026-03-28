@@ -25,6 +25,7 @@ from frontend.api_client import (
     get_current_advisor,
     list_clients,
     login_advisor,
+    register_advisor,
     update_client_record,
 )
 from frontend.components.dashboard import render_dashboard
@@ -146,28 +147,66 @@ def _build_client_profile(client_record: dict) -> dict:
 def _render_login_screen() -> None:
     st.subheader("Advisor Login")
     st.caption(f"Connecting to backend API at `{API_BASE_URL}`.")
-    with st.form("advisor_login_form", clear_on_submit=False):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login", width="stretch")
+    login_tab, register_tab = st.tabs(["Login", "Register"])
 
-    if not submitted:
-        return
+    with login_tab:
+        if st.session_state.get("register_success_message"):
+            st.success(st.session_state.pop("register_success_message"))
+        with st.form("advisor_login_form", clear_on_submit=False):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", width="stretch")
 
-    try:
-        auth_response = login_advisor(email=email, password=password)
-    except APIClientError as exc:
-        st.error(str(exc))
-        return
+        if submitted:
+            try:
+                auth_response = login_advisor(email=email, password=password)
+            except APIClientError as exc:
+                st.error(str(exc))
+            else:
+                advisor = auth_response.get("advisor", {})
+                st.session_state["advisor_token"] = auth_response["access_token"]
+                st.session_state["advisor_id"] = advisor.get("id")
+                st.session_state["advisor_name"] = advisor.get("name", "Advisor")
+                st.session_state["advisor_email"] = advisor.get("email")
+                st.session_state["advisor_role"] = advisor.get("role", "advisor")
+                st.success("Login successful.")
+                st.rerun()
 
-    advisor = auth_response.get("advisor", {})
-    st.session_state["advisor_token"] = auth_response["access_token"]
-    st.session_state["advisor_id"] = advisor.get("id")
-    st.session_state["advisor_name"] = advisor.get("name", "Advisor")
-    st.session_state["advisor_email"] = advisor.get("email")
-    st.session_state["advisor_role"] = advisor.get("role", "advisor")
-    st.success("Login successful.")
-    st.rerun()
+    with register_tab:
+        with st.form("advisor_register_form", clear_on_submit=False):
+            full_name = st.text_input("Full Name")
+            register_email = st.text_input("Email")
+            register_password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            role = st.selectbox("Role", ["advisor", "admin"], index=0)
+            register_submitted = st.form_submit_button("Register", width="stretch")
+
+        if register_submitted:
+            if not full_name.strip() or not register_email.strip() or not register_password or not confirm_password:
+                st.error("All fields are required.")
+            elif len(register_password) < 8:
+                st.error("Password must be at least 8 characters long.")
+            elif register_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif "@" not in register_email or "." not in register_email.split("@")[-1]:
+                st.error("Enter a valid email address.")
+            else:
+                try:
+                    register_advisor(
+                        email=register_email,
+                        password=register_password,
+                        name=full_name,
+                        role=role,
+                    )
+                except APIClientError as exc:
+                    message = str(exc)
+                    if "already exists" in message.lower():
+                        st.error("An account with this email already exists.")
+                    else:
+                        st.error(message)
+                else:
+                    st.session_state["register_success_message"] = "Account created. Please login."
+                    st.rerun()
 
 
 def _render_new_client_form(token: str) -> None:

@@ -41,8 +41,35 @@ def score_funds(df: pd.DataFrame, signals: Dict[str, Any]) -> pd.DataFrame:
     n_5y = normalize(df.get("5y", pd.Series(0, index=df.index)), 0.25)
     
     # 2. Market Fit Score
-    market_trend = signals.get("market_trend", "neutral").lower()
-    market_volatility = signals.get("volatility", "medium").lower()
+    raw_volatility = (
+        signals.get("volatility")
+        or signals.get("vix")
+        or signals.get("market_volatility", 0)
+    )
+    macro_score = float(signals.get("macro_context_score", 0.5))
+
+    if isinstance(raw_volatility, str):
+        market_volatility = raw_volatility.lower()
+    elif isinstance(raw_volatility, (int, float)):
+        market_volatility = (
+            "high"
+            if raw_volatility > 25
+            else "medium"
+            if raw_volatility > 15
+            else "low"
+        )
+    else:
+        market_volatility = (
+            "high" if macro_score < 0.4 else "medium" if macro_score < 0.7 else "low"
+        )
+
+    raw_trend = signals.get("market_trend", "")
+    if isinstance(raw_trend, str) and raw_trend:
+        market_trend = raw_trend.lower()
+    else:
+        market_trend = (
+            "bearish" if macro_score < 0.4 else "bullish" if macro_score > 0.75 else "neutral"
+        )
 
     def calculate_market_fit(row) -> float:
         cat = str(row.get("category", "")).lower()

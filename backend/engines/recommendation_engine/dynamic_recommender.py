@@ -110,9 +110,22 @@ def run_dynamic_pipeline(
         if matched.empty:
             continue
             
-        # Diversification Rule: max 2 funds per category block.
-        # Ensure we pick the absolute best scoring fund.
-        top_fund = matched.iloc[0].to_dict()
+        # Pick top fund BUT vary selection slightly by risk profile
+        # to ensure different profiles get different recommendations
+        if "aggressive" in risk_profile.lower():
+            # For aggressive: prioritize highest score (alpha-seeking)
+            top_fund = matched.sort_values("score", ascending=False).iloc[0].to_dict()
+        elif "conservative" in risk_profile.lower():
+            # For conservative: prioritize consistency over raw score
+            matched = matched.copy()
+            matched["conservative_rank"] = (
+                matched["score"] * 0.4
+                + matched["consistency_score"].fillna(0.5) * 100 * 0.6
+            )
+            top_fund = matched.sort_values("conservative_rank", ascending=False).iloc[0].to_dict()
+        else:
+            # Moderate: balanced sort
+            top_fund = matched.sort_values("score", ascending=False).iloc[0].to_dict()
         
         # 6. Explanation Engine & Confidence Calculation
         score = top_fund.get("score", 0.0)

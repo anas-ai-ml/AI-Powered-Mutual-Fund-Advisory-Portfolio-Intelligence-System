@@ -70,6 +70,19 @@ def login_advisor(email: str, password: str) -> dict[str, Any]:
     )
 
 
+def register_advisor(email: str, password: str, name: str, role: str = "advisor") -> dict[str, Any]:
+    return _request(
+        "POST",
+        "/auth/register",
+        payload={
+            "email": email.strip(),
+            "password": password,
+            "name": name.strip(),
+            "role": role,
+        },
+    )
+
+
 def get_current_advisor(token: str) -> dict[str, Any]:
     return _request("GET", "/auth/me", token=token)
 

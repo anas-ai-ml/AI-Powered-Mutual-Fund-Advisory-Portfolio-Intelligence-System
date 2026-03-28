@@ -978,6 +978,7 @@ def generate_report_v2_data(client_data: Dict[str, Any], analysis_data: Dict[str
             "goal projections, and portfolio diagnostics into one deployment-ready plan."
         ),
         "score_dashboard": score_dashboard,
+        "data_freshness_note": analysis_data.get("data_freshness_note"),
         "source_note": _source_row("Integrated planning stack", now_iso),
     }
 

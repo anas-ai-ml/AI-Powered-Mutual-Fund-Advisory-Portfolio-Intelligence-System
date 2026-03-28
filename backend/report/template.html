@@ -253,6 +253,11 @@
         <h2>1. Executive Summary</h2>
         <div class="hero-card">
             <p>{{ executive_summary.overview }}</p>
+            {% if executive_summary.get('data_freshness_note') %}
+            <p style="margin-top:10px;font-size:11px;color:#fef3c7;">
+                {{ executive_summary.get('data_freshness_note') }}
+            </p>
+            {% endif %}
         </div>
         <img src="{{ charts.score_dashboard }}" class="chart-img" alt="Score Dashboard">
         <div class="score-dashboard-grid">

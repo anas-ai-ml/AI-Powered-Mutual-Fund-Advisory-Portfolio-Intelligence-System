@@ -98,7 +98,7 @@ def get_current_advisor(
     return advisor
 
 
-@router.post("/register")
+@router.post("/register", status_code=201)
 def register_advisor(payload: RegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(Advisor).filter(Advisor.email == payload.email).first()
     if existing:
