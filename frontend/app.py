@@ -30,7 +30,7 @@ from frontend.api_client import (
     update_advisor_profile,
     update_client_record,
 )
-from frontend.components.audit_trail import render_audit_trail
+from frontend.components.audit_trail import render_audit_trail_screen as render_audit_trail
 from frontend.components.client_portal import render_client_portal
 from frontend.components.dashboard import render_dashboard
 from frontend.components.global_dashboard import render_global_dashboard
@@ -557,7 +557,7 @@ else:
             render_meeting_notes(advisor_token, selected_client_id)
 
         with snapshot_tab:
-            render_portfolio_snapshot(advisor_token, selected_client_id)
+            render_portfolio_snapshot(advisor_token, selected_client_id, client_profile)
 
         with proposal_tab:
             render_proposal_builder(advisor_token, selected_client_id, client_record)
