@@ -530,6 +530,9 @@ else:
                             selected_client_id,
                             {
                                 "age": int(updated_profile["age"]),
+                                "occupation": updated_profile.get("occupation"),
+                                "income_bracket": updated_profile.get("income_bracket"),
+                                "investable_surplus": updated_profile.get("effective_monthly_savings"),
                                 "profile_data": updated_profile,
                             },
                         )

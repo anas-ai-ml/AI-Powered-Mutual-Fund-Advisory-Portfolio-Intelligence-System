@@ -151,12 +151,15 @@ def _render_goal_inputs(
                 key=f"goal_{idx}_current_monthly_expense",
             )
         with col2:
+            # Clamp stored value to be strictly > age to avoid Streamlit crash
+            ret_age_min = int(age + 1)
+            ret_age_val = max(ret_age_min, int(inputs.get("retirement_age", target_retirement_age)))
             rendered["retirement_age"] = int(
                 st.number_input(
                     f"Retirement Age #{idx + 1}",
-                    min_value=int(age + 1),
+                    min_value=ret_age_min,
                     max_value=100,
-                    value=int(inputs.get("retirement_age", target_retirement_age)),
+                    value=ret_age_val,
                     step=1,
                     key=f"goal_{idx}_retirement_age",
                 )
@@ -245,9 +248,9 @@ def _render_goal_inputs(
         rendered["years_to_goal"] = int(
             st.number_input(
                 f"Years to Goal #{idx + 1}",
-                min_value=0,
+                min_value=1,          # BUG FIX: was 0 — 0 years produces SIP=0 silently
                 max_value=40,
-                value=int(inputs.get("years_to_goal", 10)),
+                value=max(1, int(inputs.get("years_to_goal", 10))),
                 step=1,
                 key=f"goal_{idx}_years_to_goal",
             )
@@ -258,11 +261,12 @@ def _render_goal_inputs(
             f"Custom Inflation Rate (%) #{idx + 1}",
             min_value=0.0,
             max_value=25.0,
-            value=float(inputs.get("custom_inflation", 0.065) or 0.0) * 100.0,
+            value=float(inputs.get("custom_inflation", 0.065) or 0.065) * 100.0,
             step=0.5,
             key=f"goal_{idx}_custom_inflation",
         )
-        rendered["custom_inflation"] = custom_inflation_pct / 100.0 if custom_inflation_pct > 0 else None
+        # BUG FIX: was returning None for 0% — engine expects a float
+        rendered["custom_inflation"] = custom_inflation_pct / 100.0 if custom_inflation_pct > 0 else 0.065
 
     return rendered
 
@@ -274,6 +278,31 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
     insurance_inputs = initial_data.get("insurance_inputs", {})
     outstanding_loans_default = insurance_inputs.get("outstanding_loans", [])
 
+    # ── Dynamic counts OUTSIDE the form so changing them re-renders fields ───
+    # These live outside st.form so Streamlit reruns immediately on change.
+    count_col1, count_col2 = st.columns(2)
+    with count_col1:
+        goal_entry_count = int(st.number_input(
+            "Number of Financial Goals",
+            min_value=1,
+            max_value=8,
+            value=st.session_state.get("if_goal_count", max(1, len(goal_entries_default))),
+            step=1,
+            key="if_goal_count",
+            help="Change this to add or remove goal entries. Fields update immediately.",
+        ))
+    with count_col2:
+        num_loans = int(st.number_input(
+            "Number of Outstanding Loans",
+            min_value=0,
+            max_value=5,
+            value=st.session_state.get("if_loan_count", len(outstanding_loans_default)),
+            step=1,
+            key="if_loan_count",
+            help="Change this to add or remove loan fields. Fields update immediately.",
+        ))
+
+    # ── Main profile form ─────────────────────────────────────────────────────
     with st.form("client_profile_form", clear_on_submit=False):
         st.subheader("Personal Details")
         col1, col2 = st.columns(2)
@@ -289,19 +318,36 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
                 ["Single", "Married"],
                 index=0 if initial_data.get("marital_status", "Single") == "Single" else 1,
             )
+            occupation = st.text_input(
+                "Occupation",
+                value=str(initial_data.get("occupation") or ""),
+                placeholder="e.g. Salaried, Business Owner, Retired",
+            )
         with col2:
-            default_dependents = 0 if marital_status == "Single" else 2
+            default_dependents = 0 if initial_data.get("marital_status", "Single") == "Single" else 2
             dependents = st.number_input(
                 "Dependents",
                 min_value=0,
                 max_value=10,
                 value=int(initial_data.get("dependents", default_dependents)),
             )
+            # BUG FIX: clamp stored value so it's always >= age+1 to avoid Streamlit crash
+            ret_age_min = int(age + 1)
+            ret_age_default = max(
+                ret_age_min,
+                int(initial_data.get("target_retirement_age", max(60, ret_age_min)))
+            )
             target_retirement_age = st.number_input(
                 "Target Retirement Age",
-                min_value=int(age + 1),
+                min_value=ret_age_min,
                 max_value=100,
-                value=int(initial_data.get("target_retirement_age", max(60, int(age + 1)))),
+                value=ret_age_default,
+            )
+            income_bracket = st.selectbox(
+                "Income Bracket",
+                ["", "Below ₹3L", "₹3L–₹7L", "₹7L–₹15L", "₹15L–₹30L", "Above ₹30L"],
+                index=0,
+                help="Annual income bracket for risk profiling context.",
             )
 
         st.subheader("Financial Details (₹)")
@@ -314,13 +360,15 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
                 step=10000.0,
             )
         with col4:
+            # BUG FIX: fallback max was 100.0 — use a large ceiling instead
+            savings_max = float(monthly_income) if monthly_income > 0 else 10000000.0
             monthly_savings = st.number_input(
                 "Monthly Savings Capacity",
                 min_value=0.0,
-                max_value=float(monthly_income) if monthly_income > 0 else 100.0,
+                max_value=savings_max,
                 value=min(
                     float(initial_data.get("monthly_savings", 40000.0)),
-                    float(monthly_income) if monthly_income > 0 else 100.0,
+                    savings_max,
                 ),
                 step=5000.0,
             )
@@ -378,16 +426,12 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
                 step=5000.0,
             )
 
-        num_loans = st.number_input(
-            "Number of Outstanding Loans",
-            min_value=0,
-            max_value=5,
-            value=int(len(outstanding_loans_default)),
-            step=1,
-        )
+        # Loan fields — count driven by num_loans set outside the form
         outstanding_loans = []
+        if num_loans > 0:
+            st.markdown(f"**Outstanding Loans ({num_loans})**")
         loan_type_options = ["Home", "Car", "Personal", "Education", "Other"]
-        for idx in range(int(num_loans)):
+        for idx in range(num_loans):
             existing_loan = (
                 outstanding_loans_default[idx]
                 if idx < len(outstanding_loans_default)
@@ -448,15 +492,10 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
             value=int(initial_data.get("annual_sip_step_up_pct", 10)),
             step=1,
         )
-        goal_entry_count = st.number_input(
-            "Number of Goal Entries",
-            min_value=1,
-            max_value=8,
-            value=max(1, len(goal_entries_default)),
-            step=1,
-        )
+
+        # Goal fields — count driven by goal_entry_count set outside the form
         goal_entries = []
-        for idx in range(int(goal_entry_count)):
+        for idx in range(goal_entry_count):
             default_entry = (
                 goal_entries_default[idx]
                 if idx < len(goal_entries_default)
@@ -489,9 +528,21 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
     if not submitted:
         return None
 
+    # ── Post-submit validations ───────────────────────────────────────────────
     if monthly_savings > monthly_income:
-        st.error("Savings cannot exceed income.")
+        st.error("Monthly savings cannot exceed monthly income.")
         return None
+
+    total_emi = sum(float(loan.get("emi", 0.0)) for loan in outstanding_loans)
+
+    # BUG FIX: warn if EMI burden exceeds savings capacity
+    effective_monthly_savings = monthly_savings - total_emi
+    if effective_monthly_savings < 0:
+        st.warning(
+            f"Total EMI (₹{total_emi:,.0f}) exceeds savings capacity (₹{monthly_savings:,.0f}). "
+            f"Effective investable surplus is ₹0. Consider reviewing liabilities."
+        )
+        effective_monthly_savings = 0.0
 
     for goal_entry in goal_entries:
         if goal_entry["type"] == GoalType.RETIREMENT.name:
@@ -500,14 +551,8 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
                 st.error("Retirement age must be strictly greater than current age.")
                 return None
 
-    total_emi = sum(float(loan.get("emi", 0.0)) for loan in outstanding_loans)
-    effective_monthly_savings = monthly_savings - total_emi
     first_retirement_goal = next(
-        (
-            goal_entry
-            for goal_entry in goal_entries
-            if goal_entry["type"] == GoalType.RETIREMENT.name
-        ),
+        (g for g in goal_entries if g["type"] == GoalType.RETIREMENT.name),
         None,
     )
 
@@ -515,6 +560,8 @@ def render_input_form(initial_data: dict | None = None) -> dict | None:
         "age": age,
         "dependents": dependents,
         "marital_status": marital_status,
+        "occupation": occupation.strip() or None,
+        "income_bracket": income_bracket or None,
         "target_retirement_age": int(
             first_retirement_goal["inputs"].get("retirement_age", target_retirement_age)
         )
