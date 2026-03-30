@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_advisor, router as auth_router
@@ -16,9 +17,12 @@ from backend.database.connection import get_db
 from backend.database.init_db import init_db
 from backend.database.models import (
     Advisor,
+    AdvisorOverride,
     AuditLog,
     Client,
     GoalLine,
+    IssuedReport,
+    MeetingNote,
     PortfolioSnapshot,
     ProposalDraft,
     RiskQuestionnaire,
@@ -55,6 +59,9 @@ class ClientCreateRequest(BaseModel):
     pan_placeholder: Optional[str] = None
     city: Optional[str] = None
     source_channel: Optional[str] = None
+    occupation: Optional[str] = None
+    income_bracket: Optional[str] = None
+    investable_surplus: Optional[float] = None
 
 
 class ClientUpdateRequest(BaseModel):
@@ -64,6 +71,9 @@ class ClientUpdateRequest(BaseModel):
     pan_placeholder: Optional[str] = None
     city: Optional[str] = None
     source_channel: Optional[str] = None
+    occupation: Optional[str] = None
+    income_bracket: Optional[str] = None
+    investable_surplus: Optional[float] = None
     profile_data: Optional[Dict[str, Any]] = None
 
 
@@ -85,13 +95,105 @@ class AuditLogRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class MeetingNoteCreateRequest(BaseModel):
+    raw_transcript: str
+    ai_summary: Optional[str] = None
+    structured_extractions: Optional[Dict[str, Any]] = None
+    confidence_flags: Optional[Dict[str, Any]] = None
+
+
+class ProposalCreateRequest(BaseModel):
+    system_draft: Dict[str, Any]
+    advisor_final: Optional[Dict[str, Any]] = None
+    override_reason: Optional[str] = None
+    category_rationale: Optional[str] = None
+    sip_assumptions: Optional[Dict[str, Any]] = None
+    benchmark_data: Optional[List[Dict[str, Any]]] = None
+    status: Optional[str] = "draft"
+
+
+class IssueReportRequest(BaseModel):
+    report_type: str = "proposal_deck"
+
+
+class AIExtractRequest(BaseModel):
+    raw_transcript: str
+
+
+class AdvisorProfileUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    firm_name: Optional[str] = None
+    phone: Optional[str] = None
+    logo_path: Optional[str] = None
+
+
+class OverrideCreateRequest(BaseModel):
+    original: Optional[Dict[str, Any]] = None
+    replacement: Optional[Dict[str, Any]] = None
+    reason: str = ""
+
+
+class OverrideRejectRequest(BaseModel):
+    reason: str = ""
+
+
+class ReviewReportRequest(BaseModel):
+    notes: Optional[str] = None
+
+
 AUDIT_ACTIONS = {
     "profile_edit",
     "proposal_generated",
     "report_issue",
     "report_issued",
     "analysis_viewed",
+    "meeting_note_created",
+    "proposal_approved",
+    "report_issued",
 }
+
+
+def _serialize_meeting_note(note: MeetingNote) -> Dict[str, Any]:
+    return {
+        "id": note.id,
+        "client_id": note.client_id,
+        "advisor_id": note.advisor_id,
+        "raw_transcript": note.raw_transcript,
+        "ai_summary": note.ai_summary,
+        "structured_extractions": note.structured_extractions or {},
+        "confidence_flags": note.confidence_flags or {},
+        "created_at": note.created_at.isoformat() if note.created_at else None,
+        "applied_to_profile": note.applied_to_profile,
+    }
+
+
+def _serialize_proposal_draft(draft: ProposalDraft) -> Dict[str, Any]:
+    return {
+        "id": draft.id,
+        "client_id": draft.client_id,
+        "system_draft": draft.system_draft,
+        "advisor_final": draft.advisor_final,
+        "override_reason": draft.override_reason,
+        "status": draft.status,
+        "version_number": draft.version_number,
+        "category_rationale": draft.category_rationale,
+        "sip_assumptions": draft.sip_assumptions or {},
+        "benchmark_data": draft.benchmark_data or [],
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+    }
+
+
+def _serialize_issued_report(report: IssuedReport) -> Dict[str, Any]:
+    return {
+        "id": report.id,
+        "proposal_id": report.proposal_id,
+        "client_id": report.client_id,
+        "issued_by": report.issued_by,
+        "pdf_path": report.pdf_path,
+        "version_number": report.version_number,
+        "issue_date": report.issue_date.isoformat() if report.issue_date else None,
+        "report_type": report.report_type,
+    }
 
 
 def _serialize_client(client: Client, latest_risk: Optional[RiskQuestionnaire] = None) -> Dict[str, Any]:
@@ -105,6 +207,9 @@ def _serialize_client(client: Client, latest_risk: Optional[RiskQuestionnaire] =
         "pan_placeholder": client.pan_placeholder,
         "city": client.city,
         "source_channel": client.source_channel,
+        "occupation": client.occupation,
+        "income_bracket": client.income_bracket,
+        "investable_surplus": client.investable_surplus,
         "profile_data": client.profile_data or {},
         "created_at": client.created_at.isoformat() if client.created_at else None,
         "risk_class": latest_risk.risk_class if latest_risk else None,
@@ -225,12 +330,18 @@ def create_client(
         pan_placeholder=payload.pan_placeholder,
         city=payload.city,
         source_channel=payload.source_channel,
+        occupation=payload.occupation,
+        income_bracket=payload.income_bracket,
+        investable_surplus=payload.investable_surplus,
         profile_data={
             "age": payload.age,
             "contact": payload.contact,
             "pan_placeholder": payload.pan_placeholder,
             "city": payload.city,
             "source_channel": payload.source_channel,
+            "occupation": payload.occupation,
+            "income_bracket": payload.income_bracket,
+            "investable_surplus": payload.investable_surplus,
         },
     )
     try:
@@ -348,6 +459,9 @@ def update_client(
         "pan_placeholder": client.pan_placeholder,
         "city": client.city,
         "source_channel": client.source_channel,
+        "occupation": client.occupation,
+        "income_bracket": client.income_bracket,
+        "investable_surplus": client.investable_surplus,
         "profile_data": dict(client.profile_data or {}),
     }
     update_data = payload.model_dump(exclude_unset=True)
@@ -370,6 +484,9 @@ def update_client(
         "pan_placeholder": client.pan_placeholder,
         "city": client.city,
         "source_channel": client.source_channel,
+        "occupation": client.occupation,
+        "income_bracket": client.income_bracket,
+        "investable_surplus": client.investable_surplus,
         "profile_data": dict(client.profile_data or {}),
     }
     db.add(
@@ -591,3 +708,614 @@ def create_audit_log(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create audit log: {exc}")
     return _serialize_audit_log(entry)
+
+
+@app.post("/clients/{client_id}/meeting-notes")
+def create_meeting_note(
+    client_id: int,
+    payload: MeetingNoteCreateRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    note = MeetingNote(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        raw_transcript=payload.raw_transcript,
+        ai_summary=payload.ai_summary,
+        structured_extractions=payload.structured_extractions,
+        confidence_flags=payload.confidence_flags,
+    )
+    db.add(note)
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="meeting_note_created",
+        after_value={"ai_summary": payload.ai_summary},
+        notes="Meeting note captured.",
+    ))
+    try:
+        db.commit()
+        db.refresh(note)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save meeting note: {exc}")
+    return _serialize_meeting_note(note)
+
+
+@app.get("/clients/{client_id}/meeting-notes")
+def list_meeting_notes(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    notes = (
+        db.query(MeetingNote)
+        .filter(MeetingNote.client_id == client.id)
+        .order_by(MeetingNote.created_at.desc())
+        .all()
+    )
+    return [_serialize_meeting_note(n) for n in notes]
+
+
+@app.post("/meeting-notes/{note_id}/apply-to-profile")
+def apply_meeting_note_to_profile(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    note = db.query(MeetingNote).filter(MeetingNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Meeting note not found")
+    client = _get_accessible_client_or_404(db, current_advisor, note.client_id)
+    extractions = note.structured_extractions or {}
+    merged_profile = dict(client.profile_data or {})
+    for key, value in extractions.items():
+        if value is not None:
+            merged_profile[key] = value
+    client.profile_data = merged_profile
+    if merged_profile.get("age") is not None:
+        try:
+            client.age = int(merged_profile["age"])
+        except (TypeError, ValueError):
+            pass
+    note.applied_to_profile = True
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="profile_edit",
+        after_value={"source": "meeting_note", "note_id": note_id, "applied_fields": list(extractions.keys())},
+        notes=f"Profile updated from meeting note #{note_id}.",
+    ))
+    try:
+        db.commit()
+        db.refresh(client)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to apply note: {exc}")
+    latest_risk = _latest_risk_for_client(db, client.id)
+    return _serialize_client(client, latest_risk=latest_risk)
+
+
+@app.post("/clients/{client_id}/proposals")
+def create_proposal(
+    client_id: int,
+    payload: ProposalCreateRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    version_number = (
+        db.query(func.count(ProposalDraft.id))
+        .filter(ProposalDraft.client_id == client.id)
+        .scalar()
+        or 0
+    ) + 1
+    draft = ProposalDraft(
+        client_id=client.id,
+        system_draft=payload.system_draft,
+        advisor_final=payload.advisor_final,
+        override_reason=payload.override_reason,
+        status=payload.status or "draft",
+        version_number=version_number,
+        category_rationale=payload.category_rationale,
+        sip_assumptions=payload.sip_assumptions,
+        benchmark_data=payload.benchmark_data,
+    )
+    db.add(draft)
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="proposal_generated",
+        after_value={"version_number": version_number, "status": draft.status},
+        notes=f"Proposal v{version_number} created.",
+    ))
+    try:
+        db.commit()
+        db.refresh(draft)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create proposal: {exc}")
+    return _serialize_proposal_draft(draft)
+
+
+@app.get("/clients/{client_id}/proposals")
+def list_proposals(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    drafts = (
+        db.query(ProposalDraft)
+        .filter(ProposalDraft.client_id == client.id)
+        .order_by(ProposalDraft.version_number.desc())
+        .all()
+    )
+    return [_serialize_proposal_draft(d) for d in drafts]
+
+
+@app.post("/clients/{client_id}/proposals/{proposal_id}/approve")
+def approve_proposal(
+    client_id: int,
+    proposal_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    draft = db.query(ProposalDraft).filter(
+        ProposalDraft.id == proposal_id,
+        ProposalDraft.client_id == client.id,
+    ).first()
+    if not draft:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    draft.status = "approved"
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="proposal_approved",
+        after_value={"proposal_id": proposal_id, "version_number": draft.version_number},
+        notes=f"Proposal v{draft.version_number} approved.",
+    ))
+    try:
+        db.commit()
+        db.refresh(draft)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to approve proposal: {exc}")
+    return _serialize_proposal_draft(draft)
+
+
+@app.post("/clients/{client_id}/proposals/{proposal_id}/issue")
+def issue_proposal_report(
+    client_id: int,
+    proposal_id: int,
+    payload: IssueReportRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    draft = db.query(ProposalDraft).filter(
+        ProposalDraft.id == proposal_id,
+        ProposalDraft.client_id == client.id,
+    ).first()
+    if not draft:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if draft.status not in ("approved", "reviewed", "overridden"):
+        raise HTTPException(status_code=400, detail=f"Proposal must be approved before issuing. Current status: {draft.status}")
+    reports_dir = Path("reports") / f"client_{client_id}"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"proposal_v{draft.version_number}_{timestamp}.pdf"
+    pdf_path = str(reports_dir / pdf_filename)
+    try:
+        if payload.report_type == "vinsan_proposal":
+            from backend.report.pdf_generator import generate_vinsan_proposal_pdf
+            deck_data = {
+                "cover": {
+                    "client_name": client.name,
+                    "risk_class": (draft.system_draft or {}).get("risk_profile", {}).get("category", "Moderate"),
+                    "advisor_name": current_advisor.name,
+                    "version_number": draft.version_number,
+                },
+                "category_rationale": {
+                    "category_name": (draft.system_draft or {}).get("fund_category", "Mutual Fund"),
+                    "rationale_text": draft.category_rationale or "",
+                },
+                "sip_matrix": draft.sip_assumptions or {},
+                "benchmark_data": draft.benchmark_data or [],
+                "advisor_contact": {
+                    "name": current_advisor.name,
+                    "email": current_advisor.email,
+                    "firm_name": current_advisor.firm_name or "",
+                    "phone": current_advisor.phone or "",
+                },
+                "version_number": draft.version_number,
+                "issue_date": datetime.utcnow().strftime("%d %b %Y"),
+            }
+            generate_vinsan_proposal_pdf(deck_data, pdf_path)
+        else:
+            from backend.report.pdf_generator import generate_proposal_deck_pdf
+            generate_proposal_deck_pdf(draft.system_draft or {}, pdf_path)
+    except Exception as exc:
+        pdf_path = None
+    issued = IssuedReport(
+        proposal_id=draft.id,
+        client_id=client.id,
+        issued_by=current_advisor.id,
+        pdf_path=pdf_path,
+        version_number=draft.version_number,
+        report_type=payload.report_type,
+    )
+    db.add(issued)
+    draft.status = "issued"
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="report_issued",
+        after_value={"proposal_id": proposal_id, "version_number": draft.version_number, "pdf_path": pdf_path},
+        notes=f"Report v{draft.version_number} issued.",
+    ))
+    try:
+        db.commit()
+        db.refresh(issued)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to issue report: {exc}")
+    return _serialize_issued_report(issued)
+
+
+@app.get("/clients/{client_id}/issued-reports")
+def list_issued_reports(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    reports = (
+        db.query(IssuedReport)
+        .filter(IssuedReport.client_id == client.id)
+        .order_by(IssuedReport.issue_date.desc())
+        .all()
+    )
+    return [_serialize_issued_report(r) for r in reports]
+
+
+@app.post("/ai/extract-meeting-notes")
+def extract_meeting_notes(
+    payload: AIExtractRequest,
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    from backend.services.ai_note_extractor import extract_from_transcript
+    result = extract_from_transcript(payload.raw_transcript)
+    return result
+
+
+@app.get("/audit-trail")
+def get_global_audit_trail(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    query = db.query(AuditLog)
+    if not _is_admin(current_advisor):
+        client_ids = [
+            c.id for c in db.query(Client.id).filter(Client.advisor_id == current_advisor.id).all()
+        ]
+        query = query.filter(AuditLog.client_id.in_(client_ids))
+    entries = query.order_by(AuditLog.timestamp.desc()).limit(limit).all()
+    return [_serialize_audit_log(e) for e in entries]
+
+
+# ── Advisor Profile ───────────────────────────────────────────────────────────
+
+def _serialize_advisor(advisor: Advisor) -> Dict[str, Any]:
+    return {
+        "id": advisor.id,
+        "email": advisor.email,
+        "name": advisor.name,
+        "role": advisor.role,
+        "firm_name": advisor.firm_name,
+        "phone": advisor.phone,
+        "logo_path": advisor.logo_path,
+        "created_at": advisor.created_at.isoformat() if advisor.created_at else None,
+    }
+
+
+@app.get("/auth/me/profile")
+def get_advisor_profile(
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    return _serialize_advisor(current_advisor)
+
+
+@app.put("/auth/me/profile")
+def update_advisor_profile(
+    payload: AdvisorProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    if payload.name is not None:
+        current_advisor.name = payload.name
+    if payload.firm_name is not None:
+        current_advisor.firm_name = payload.firm_name
+    if payload.phone is not None:
+        current_advisor.phone = payload.phone
+    if payload.logo_path is not None:
+        current_advisor.logo_path = payload.logo_path
+    try:
+        db.commit()
+        db.refresh(current_advisor)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {exc}")
+    return _serialize_advisor(current_advisor)
+
+
+# ── Advisor Overrides (DB-persisted) ─────────────────────────────────────────
+
+def _serialize_override(o: AdvisorOverride) -> Dict[str, Any]:
+    return {
+        "id": o.id,
+        "client_id": o.client_id,
+        "advisor_id": o.advisor_id,
+        "original": o.original,
+        "replacement": o.replacement,
+        "reason": o.reason,
+        "status": o.status,
+        "created_at": o.created_at.isoformat() if o.created_at else None,
+        "approved_at": o.approved_at.isoformat() if o.approved_at else None,
+        "rejected_at": o.rejected_at.isoformat() if o.rejected_at else None,
+        "rejection_reason": o.rejection_reason,
+    }
+
+
+@app.post("/clients/{client_id}/overrides")
+def create_override(
+    client_id: int,
+    payload: OverrideCreateRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    from backend.api.advisor_overrides import AdvisorOverrideAPI
+    entry = AdvisorOverrideAPI.create(
+        db,
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        original=payload.original,
+        replacement=payload.replacement,
+        reason=payload.reason,
+    )
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="override_created",
+        before_value=payload.original,
+        after_value=payload.replacement,
+        notes=payload.reason or "Advisor override submitted.",
+    ))
+    db.commit()
+    return _serialize_override(entry)
+
+
+@app.get("/clients/{client_id}/overrides")
+def list_overrides(
+    client_id: int,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+    from backend.api.advisor_overrides import AdvisorOverrideAPI
+    entries = AdvisorOverrideAPI.list_for_client(db, client.id, status=status)
+    return [_serialize_override(e) for e in entries]
+
+
+@app.post("/clients/{client_id}/overrides/{override_id}/approve")
+def approve_override(
+    client_id: int,
+    override_id: int,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    _get_accessible_client_or_404(db, current_advisor, client_id)
+    from backend.api.advisor_overrides import AdvisorOverrideAPI
+    entry = AdvisorOverrideAPI.approve(db, override_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Override not found")
+    return _serialize_override(entry)
+
+
+@app.post("/clients/{client_id}/overrides/{override_id}/reject")
+def reject_override(
+    client_id: int,
+    override_id: int,
+    payload: OverrideRejectRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    _get_accessible_client_or_404(db, current_advisor, client_id)
+    from backend.api.advisor_overrides import AdvisorOverrideAPI
+    entry = AdvisorOverrideAPI.reject(db, override_id, payload.reason)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Override not found")
+    return _serialize_override(entry)
+
+
+# ── Proposal Counts (global summary) ─────────────────────────────────────────
+
+@app.get("/clients/proposal-counts")
+def get_proposal_counts(
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    """Returns {client_id: proposal_count} for all accessible clients."""
+    client_ids_query = db.query(Client.id)
+    if not _is_admin(current_advisor):
+        client_ids_query = client_ids_query.filter(Client.advisor_id == current_advisor.id)
+    client_ids = [row[0] for row in client_ids_query.all()]
+
+    rows = (
+        db.query(ProposalDraft.client_id, func.count(ProposalDraft.id).label("count"))
+        .filter(ProposalDraft.client_id.in_(client_ids))
+        .group_by(ProposalDraft.client_id)
+        .all()
+    )
+    return {str(row.client_id): row.count for row in rows}
+
+
+# ── Review Report ─────────────────────────────────────────────────────────────
+
+@app.post("/clients/{client_id}/review-report")
+def generate_review_report(
+    client_id: int,
+    payload: ReviewReportRequest,
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    """
+    Generate a periodic review report PDF comparing current portfolio snapshot
+    against the last issued proposal, enriched with audit history.
+    """
+    client = _get_accessible_client_or_404(db, current_advisor, client_id)
+
+    latest_snapshot = (
+        db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.client_id == client.id)
+        .order_by(PortfolioSnapshot.created_at.desc())
+        .first()
+    )
+    last_proposal = (
+        db.query(ProposalDraft)
+        .filter(ProposalDraft.client_id == client.id, ProposalDraft.status == "issued")
+        .order_by(ProposalDraft.version_number.desc())
+        .first()
+    )
+    recent_logs = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == client.id)
+        .order_by(AuditLog.timestamp.desc())
+        .limit(10)
+        .all()
+    )
+
+    snapshot_data = {}
+    if latest_snapshot:
+        total = (latest_snapshot.equity or 0) + (latest_snapshot.fd_bonds or 0) + (latest_snapshot.gold or 0) + (latest_snapshot.cash or 0)
+        snapshot_data = {
+            "equity": latest_snapshot.equity or 0,
+            "fd_bonds": latest_snapshot.fd_bonds or 0,
+            "gold": latest_snapshot.gold or 0,
+            "cash": latest_snapshot.cash or 0,
+            "total": total,
+            "notes": latest_snapshot.notes or "",
+            "as_of": latest_snapshot.created_at.isoformat() if latest_snapshot.created_at else None,
+        }
+
+    from pathlib import Path as _Path
+    reports_dir = _Path("reports") / f"client_{client_id}"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    pdf_path = str(reports_dir / f"review_{timestamp}.pdf")
+
+    review_data = {
+        "client_name": client.name,
+        "advisor_name": current_advisor.name,
+        "firm_name": current_advisor.firm_name or "",
+        "advisor_email": current_advisor.email,
+        "advisor_phone": current_advisor.phone or "",
+        "review_date": datetime.utcnow().strftime("%d %b %Y"),
+        "current_snapshot": snapshot_data,
+        "last_proposal": {
+            "version_number": last_proposal.version_number if last_proposal else None,
+            "issued_date": last_proposal.created_at.isoformat() if last_proposal and last_proposal.created_at else None,
+            "category_rationale": last_proposal.category_rationale if last_proposal else None,
+            "system_draft": last_proposal.system_draft if last_proposal else {},
+        },
+        "activity_log": [_serialize_audit_log(e) for e in recent_logs],
+        "advisor_notes": payload.notes or "",
+    }
+
+    try:
+        from backend.report.pdf_generator import generate_review_report_pdf
+        generate_review_report_pdf(review_data, pdf_path)
+    except Exception as exc:
+        pdf_path = None
+
+    issued = IssuedReport(
+        proposal_id=(last_proposal.id if last_proposal else
+                     db.query(ProposalDraft).filter(ProposalDraft.client_id == client.id)
+                     .order_by(ProposalDraft.version_number.desc()).first().id
+                     if db.query(ProposalDraft).filter(ProposalDraft.client_id == client.id).first()
+                     else None),
+        client_id=client.id,
+        issued_by=current_advisor.id,
+        pdf_path=pdf_path,
+        version_number=1,
+        report_type="review_report",
+    )
+    if issued.proposal_id is not None:
+        db.add(issued)
+    db.add(AuditLog(
+        client_id=client.id,
+        advisor_id=current_advisor.id,
+        action="review_report_generated",
+        after_value={"pdf_path": pdf_path},
+        notes="Periodic review report generated.",
+    ))
+    try:
+        db.commit()
+        if issued.proposal_id is not None:
+            db.refresh(issued)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save review report record: {exc}")
+
+    return {
+        "pdf_path": pdf_path,
+        "review_date": review_data["review_date"],
+        "client_name": client.name,
+        "report_type": "review_report",
+    }
+
+
+# ── Portal: client report viewer ──────────────────────────────────────────────
+
+@app.get("/portal/client/{client_id}/reports")
+def portal_get_client_reports(
+    client_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Public-ish endpoint for the client portal to fetch issued reports.
+    No advisor auth required — client accesses by client_id.
+    Returns only summary data (no private advisor info).
+    """
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    reports = (
+        db.query(IssuedReport)
+        .filter(IssuedReport.client_id == client_id)
+        .order_by(IssuedReport.issue_date.desc())
+        .all()
+    )
+
+    return {
+        "client_name": client.name,
+        "reports": [
+            {
+                "id": r.id,
+                "report_type": r.report_type,
+                "version_number": r.version_number,
+                "issue_date": r.issue_date.isoformat() if r.issue_date else None,
+                "pdf_available": bool(r.pdf_path),
+                "pdf_path": r.pdf_path,
+            }
+            for r in reports
+        ],
+    }

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Investment Proposal — {{ deck.cover.client_name }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 22mm 16mm;
+    @bottom-center {
+      content: "Version {{ deck.version_number }} | Issued {{ deck.issue_date }} | For Advisor Use Only";
+      font-size: 8px;
+      color: #6b7280;
+    }
+    @bottom-right {
+      content: counter(page);
+      font-size: 8px;
+      color: #6b7280;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10pt;
+    color: #1f2937;
+    line-height: 1.55;
+  }
+
+  /* ── Cover Page ─────────────────────────────────────── */
+  .cover-page {
+    page-break-after: always;
+    min-height: 250mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 30mm 20mm;
+    background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 100%);
+    color: #f8fafc;
+  }
+  .cover-firm { font-size: 10pt; letter-spacing: 0.15em; text-transform: uppercase; color: #94a3b8; margin-bottom: 10mm; }
+  .cover-title { font-size: 28pt; font-weight: 300; margin-bottom: 4mm; }
+  .cover-client { font-size: 18pt; font-weight: 600; color: #60a5fa; margin-bottom: 8mm; }
+  .risk-badge {
+    display: inline-block;
+    padding: 2mm 5mm;
+    border-radius: 4mm;
+    font-size: 9pt;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 6mm;
+  }
+  .risk-conservative { background:#d1fae5; color:#065f46; }
+  .risk-moderate { background:#fef3c7; color:#92400e; }
+  .risk-growth, .risk-aggressive { background:#fce7f3; color:#831843; }
+  .cover-meta { font-size: 9pt; color: #94a3b8; margin-top: 20mm; border-top: 1px solid #334155; padding-top: 4mm; }
+
+  /* ── Sections ────────────────────────────────────────── */
+  .section { page-break-inside: avoid; margin-bottom: 10mm; }
+  .section-eyebrow { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.12em; color: #6b7280; margin-bottom: 1mm; }
+  .section-title { font-size: 16pt; font-weight: 300; color: #1e3a5f; border-bottom: 2px solid #1e3a5f; padding-bottom: 2mm; margin-bottom: 4mm; }
+  .section-body { font-size: 10pt; color: #374151; }
+
+  /* ── Client Snapshot ─────────────────────────────────── */
+  .snapshot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; margin-top: 3mm; }
+  .snapshot-item { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 2mm; padding: 3mm; }
+  .snapshot-label { font-size: 7pt; text-transform: uppercase; color: #6b7280; letter-spacing: 0.08em; }
+  .snapshot-value { font-size: 13pt; font-weight: 600; color: #1e3a5f; margin-top: 1mm; }
+
+  /* ── SIP Table ───────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: 9pt; }
+  th { background: #1e3a5f; color: #f8fafc; padding: 2.5mm 3mm; text-align: left; font-weight: 500; }
+  td { padding: 2mm 3mm; border-bottom: 1px solid #e2e8f0; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .number { text-align: right; font-variant-numeric: tabular-nums; }
+  .highlight-row td { background: #eff6ff !important; font-weight: 600; }
+
+  /* ── Disclaimer ──────────────────────────────────────── */
+  .disclaimer-box {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-left: 3px solid #9ca3af;
+    padding: 3mm 4mm;
+    font-size: 7.5pt;
+    color: #6b7280;
+    margin-top: 4mm;
+  }
+
+  /* ── Contact Block ───────────────────────────────────── */
+  .contact-block {
+    margin-top: 8mm;
+    padding: 4mm;
+    background: #1e3a5f;
+    color: #f8fafc;
+    border-radius: 2mm;
+    font-size: 9pt;
+  }
+  .contact-block strong { color: #60a5fa; }
+
+  .page-break { page-break-after: always; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════ COVER PAGE ═════════════════════════ -->
+<div class="cover-page">
+  <div class="cover-firm">
+    {% if deck.advisor_contact.firm_name %}{{ deck.advisor_contact.firm_name }}{% else %}{{ deck.advisor_contact.name }}{% endif %}
+    &nbsp;|&nbsp; Advisory Proposal
+  </div>
+  <div class="cover-title">Investment Proposal</div>
+  <div class="cover-client">{{ deck.cover.client_name }}</div>
+  {% set rc = deck.cover.risk_class | lower | replace(' ', '') %}
+  <span class="risk-badge risk-{{ rc }}">{{ deck.cover.risk_class }} Investor Profile</span>
+  <div class="cover-meta">
+    Version {{ deck.version_number }} &nbsp;|&nbsp; Issued {{ deck.issue_date }}<br>
+    Prepared by: {{ deck.advisor_contact.name }}
+    {% if deck.advisor_contact.email %} &nbsp;|&nbsp; {{ deck.advisor_contact.email }}{% endif %}
+    {% if deck.advisor_contact.phone %} &nbsp;|&nbsp; {{ deck.advisor_contact.phone }}{% endif %}
+  </div>
+</div>
+
+<!-- ══════════════════════════════ CLIENT SNAPSHOT ═════════════════════════ -->
+<div class="section">
+  <div class="section-eyebrow">Client Overview</div>
+  <div class="section-title">Client Profile</div>
+  <div class="snapshot-grid">
+    {% if deck.cover.client_name %}
+    <div class="snapshot-item">
+      <div class="snapshot-label">Client Name</div>
+      <div class="snapshot-value">{{ deck.cover.client_name }}</div>
+    </div>
+    {% endif %}
+    {% if deck.cover.risk_class %}
+    <div class="snapshot-item">
+      <div class="snapshot-label">Risk Profile</div>
+      <div class="snapshot-value">{{ deck.cover.risk_class }}</div>
+    </div>
+    {% endif %}
+    <div class="snapshot-item">
+      <div class="snapshot-label">Proposal Version</div>
+      <div class="snapshot-value">v{{ deck.version_number }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════════════════ CATEGORY RATIONALE ══════════════════════ -->
+{% if deck.category_rationale and deck.category_rationale.rationale_text %}
+<div class="section">
+  <div class="section-eyebrow">Investment Rationale</div>
+  <div class="section-title">WHY — {{ deck.category_rationale.category_name | upper }}</div>
+  <div class="section-body">{{ deck.category_rationale.rationale_text }}</div>
+</div>
+{% endif %}
+
+<!-- ════════════════════════════ SIP ILLUSTRATION ═════════════════════════ -->
+{% if deck.sip_matrix and deck.sip_matrix.rows %}
+<div class="section">
+  <div class="section-eyebrow">Wealth Creation Illustration</div>
+  <div class="section-title">SIP Growth Projections</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Monthly SIP</th>
+        <th>Horizon</th>
+        <th>Assumed Return</th>
+        <th class="number">Total Invested</th>
+        <th class="number">Projected Corpus</th>
+        <th class="number">Wealth Gain</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in deck.sip_matrix.rows %}
+      <tr>
+        <td>₹{{ "{:,.0f}".format(row.monthly_sip) }}</td>
+        <td>{{ row.horizon_years }} Years</td>
+        <td>{{ row.assumed_return_pct }}% p.a.</td>
+        <td class="number">₹{{ "{:,.0f}".format(row.monthly_sip * row.horizon_years * 12) }}</td>
+        <td class="number"><strong>₹{{ "{:,.0f}".format(row.projected_corpus) }}</strong></td>
+        <td class="number">₹{{ "{:,.0f}".format(row.projected_corpus - row.monthly_sip * row.horizon_years * 12) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="disclaimer-box">
+    Past performance is not indicative of future results. Returns shown are assumed projections and are not guaranteed.
+    Actual returns may vary. Please consult your advisor before making investment decisions.
+  </div>
+</div>
+{% endif %}
+
+<!-- ══════════════════════════ BENCHMARK COMPARISON ══════════════════════ -->
+{% if deck.benchmark_data %}
+<div class="section">
+  <div class="section-eyebrow">Performance Analysis</div>
+  <div class="section-title">Benchmark Comparison</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Period</th>
+        <th class="number">Scheme (%)</th>
+        <th class="number">Benchmark (%)</th>
+        <th class="number">Category Avg (%)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in deck.benchmark_data %}
+      <tr {% if row.scheme_pct > row.benchmark_pct %}class="highlight-row"{% endif %}>
+        <td>{{ row.period }}</td>
+        <td class="number">{{ "%.1f"|format(row.scheme_pct) }}%</td>
+        <td class="number">{{ "%.1f"|format(row.benchmark_pct) }}%</td>
+        <td class="number">{{ "%.1f"|format(row.category_avg_pct) }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="disclaimer-box">
+    Benchmark comparison is for reference only. Past performance does not guarantee future returns.
+  </div>
+</div>
+{% endif %}
+
+<!-- ══════════════════════════════ CONTACT BLOCK ══════════════════════════ -->
+<div class="contact-block">
+  <strong>{{ deck.advisor_contact.name }}</strong>
+  {% if deck.advisor_contact.firm_name %} &nbsp;—&nbsp; {{ deck.advisor_contact.firm_name }}{% endif %}<br>
+  {% if deck.advisor_contact.email %}Email: {{ deck.advisor_contact.email }}<br>{% endif %}
+  {% if deck.advisor_contact.phone %}Phone: {{ deck.advisor_contact.phone }}<br>{% endif %}
+  Investment Advisory Services | Mutual Fund Distributor
+</div>
+
+<!-- ══════════════════════════════ DISCLAIMER ═════════════════════════════ -->
+<div class="disclaimer-box" style="margin-top:6mm;">
+  {{ disclaimer }}
+</div>
+
+</body>
+</html>

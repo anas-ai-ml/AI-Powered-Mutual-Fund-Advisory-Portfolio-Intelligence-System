@@ -19,6 +19,7 @@ from frontend.api_client import (
     APIClientError,
     API_BASE_URL,
     create_client_audit_log,
+    get_advisor_profile,
     get_client_audit_trail,
     create_client_record,
     get_client_record,
@@ -26,10 +27,18 @@ from frontend.api_client import (
     list_clients,
     login_advisor,
     register_advisor,
+    update_advisor_profile,
     update_client_record,
 )
+from frontend.components.audit_trail import render_audit_trail
+from frontend.components.client_portal import render_client_portal
 from frontend.components.dashboard import render_dashboard
+from frontend.components.global_dashboard import render_global_dashboard
 from frontend.components.input_form import render_input_form
+from frontend.components.meeting_notes import render_meeting_notes
+from frontend.components.portfolio_snapshot import render_portfolio_snapshot
+from frontend.components.proposal_builder import render_proposal_builder
+from frontend.components.review_report import render_review_report
 
 st.set_page_config(page_title="Institutional Financial Engine", layout="wide")
 
@@ -326,6 +335,50 @@ def _render_client_selector(token: str) -> None:
                     st.rerun()
 
 
+def _render_advisor_settings(token: str) -> None:
+    st.subheader("Advisor Settings")
+    st.caption("Update your branding details — these appear on all generated PDF reports.")
+
+    try:
+        profile = get_advisor_profile(token)
+    except APIClientError as exc:
+        st.error(f"Could not load profile: {exc}")
+        return
+
+    with st.form("advisor_settings_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Display Name", value=profile.get("name") or "")
+            firm_name = st.text_input("Firm / Company Name", value=profile.get("firm_name") or "",
+                                      placeholder="e.g. Vinsan Financial Services")
+        with col2:
+            phone = st.text_input("Phone Number", value=profile.get("phone") or "",
+                                  placeholder="e.g. +91 98765 43210")
+            logo_path = st.text_input("Logo File Path (server path)", value=profile.get("logo_path") or "",
+                                      placeholder="e.g. /app/assets/logo.png")
+
+        st.caption(f"Email: `{profile.get('email')}` (cannot be changed) | Role: `{profile.get('role')}`")
+        save = st.form_submit_button("Save Settings", use_container_width=True)
+
+    if save:
+        try:
+            updated = update_advisor_profile(token, {
+                "name": name.strip() or None,
+                "firm_name": firm_name.strip() or None,
+                "phone": phone.strip() or None,
+                "logo_path": logo_path.strip() or None,
+            })
+            st.session_state["advisor_name"] = updated.get("name", st.session_state.get("advisor_name"))
+            st.success("Settings saved. Your details will appear on the next generated report.")
+        except APIClientError as exc:
+            st.error(f"Failed to save: {exc}")
+
+    st.markdown("---")
+    st.markdown("**Client Portal Link**")
+    st.caption("Share this URL pattern with clients after issuing a proposal:")
+    st.code("http://localhost:8501/?view=portal&client_id=<CLIENT_ID>", language="text")
+
+
 def _render_audit_trail(token: str, client_id: int) -> None:
     st.subheader("Audit Trail")
     st.caption("Chronological history of profile edits, proposal actions, and report issues for this client.")
@@ -394,6 +447,16 @@ def _load_selected_client(token: str, client_id: int) -> tuple[dict, dict] | tup
     return client_record, client_profile
 
 
+# ── Client portal: ?view=portal&client_id=X ──────────────────────────────────
+_qp = st.query_params
+if _qp.get("view") == "portal":
+    _portal_client_id = _qp.get("client_id")
+    if _portal_client_id:
+        render_client_portal(token="", report_id=int(_portal_client_id))
+    else:
+        st.error("Invalid portal link. No client_id provided.")
+    st.stop()
+
 if "advisor_token" not in st.session_state:
     _render_login_screen()
 else:
@@ -411,7 +474,11 @@ else:
         st.rerun()
 
     if not st.session_state.get("selected_client_id"):
-        _render_client_selector(advisor_token)
+        dash_tab, settings_tab = st.tabs(["Dashboard", "Advisor Settings"])
+        with dash_tab:
+            render_global_dashboard(advisor_token)
+        with settings_tab:
+            _render_advisor_settings(advisor_token)
     else:
         selected_client_id = int(st.session_state["selected_client_id"])
         client_record, client_profile = _load_selected_client(advisor_token, selected_client_id)
@@ -434,7 +501,21 @@ else:
                 _clear_login_state()
                 st.rerun()
 
-        analysis_tab, audit_tab = st.tabs(["Analysis Workspace", "Audit Trail"])
+        (
+            analysis_tab,
+            meeting_tab,
+            snapshot_tab,
+            proposal_tab,
+            review_tab,
+            audit_tab,
+        ) = st.tabs([
+            "Analysis Workspace",
+            "Meeting Notes",
+            "Portfolio Snapshot",
+            "Proposal Builder",
+            "Review Report",
+            "Audit Trail",
+        ])
 
         with analysis_tab:
             col1, col2 = st.columns([1, 2.5])
@@ -472,8 +553,20 @@ else:
                 else:
                     st.info("Complete and save the client profile to load the dashboard.")
 
+        with meeting_tab:
+            render_meeting_notes(advisor_token, selected_client_id)
+
+        with snapshot_tab:
+            render_portfolio_snapshot(advisor_token, selected_client_id)
+
+        with proposal_tab:
+            render_proposal_builder(advisor_token, selected_client_id, client_record)
+
+        with review_tab:
+            render_review_report(advisor_token, selected_client_id, client_record)
+
         with audit_tab:
-            _render_audit_trail(advisor_token, selected_client_id)
+            render_audit_trail(advisor_token, selected_client_id)
 
 st.markdown("---")
 with open(PROJECT_ROOT / "DISCLAIMER.txt", "r") as f:

@@ -2,7 +2,28 @@
 backend/engines/recommendation_engine/scoring_engine.py
 ───────────────────────────────────────────────────────
 Multi-factor scoring engine to rank funds and adjust for market signals.
+
+AI BOUNDARY ENFORCEMENT
+───────────────────────
+This module is DETERMINISTIC.  No AI model, LLM call, or probabilistic
+inference is permitted here.  All scoring is derived from explicit
+mathematical formulas applied to fund data and market signal inputs.
+
+Permitted in this module:
+  - Arithmetic weighting of quantitative metrics (returns, volatility, etc.)
+  - Rule-based market-fit adjustments driven by signal enum values
+
+Not permitted in this module:
+  - LLM-generated scores or rankings
+  - Heuristics that cannot be audited by inspecting the formula alone
+  - Any import of AI/ML inference libraries for scoring decisions
+
+AI is reserved exclusively for generating explanations, summaries, and
+user-facing wording — never for filtering, scoring, or decision logic.
 """
+
+# AI_BOUNDARY_ENFORCED — do not remove this marker
+AI_BOUNDARY_ENFORCED: bool = True
 
 import pandas as pd
 from typing import Dict, Any

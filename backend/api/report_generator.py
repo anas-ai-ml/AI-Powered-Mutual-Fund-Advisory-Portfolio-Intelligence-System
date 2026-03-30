@@ -111,6 +111,41 @@ class ReportGenerator:
     def add_fund_intelligence(self, intelligence: Dict[str, Any]) -> None:
         self.add_section("fund_intelligence", intelligence)
 
+    def add_advisory_result(self, advisory_result: Dict[str, Any]) -> None:
+        """Attach the full output of ``run_advisory_pipeline()`` to the report."""
+        self.add_section("advisory", advisory_result)
+
+    def generate_priority_plan_section(self) -> Dict[str, Any]:
+        """
+        Build the 'Financial Priority Plan' block.
+
+        Shows whether the client is investment-ready, their financial health
+        score, block reason (if any), and ordered action steps.
+        """
+        advisory_data = self.report_data.get("advisory", {}).get("data", {})
+        if not advisory_data:
+            return {}
+
+        investment_allowed: bool = bool(advisory_data.get("investment_allowed", True))
+        financial_health: Dict[str, Any] = advisory_data.get("financial_health") or {}
+        priority_actions: List[Dict[str, Any]] = advisory_data.get("priority_actions") or []
+        block_reason: str = str(advisory_data.get("reason") or "")
+
+        return {
+            "title": "Financial Priority Plan",
+            "investment_ready": investment_allowed,
+            "message": (
+                "You are not ready to invest yet."
+                if not investment_allowed
+                else "You are ready to invest."
+            ),
+            "block_reason": block_reason,
+            "health_score": float(financial_health.get("score", 0.0) or 0.0),
+            "health_band": str(financial_health.get("band") or ""),
+            "health_drivers": list(financial_health.get("drivers") or []),
+            "priority_actions": priority_actions,
+        }
+
     def generate_summary(self) -> Dict[str, Any]:
         summary = {
             "generated_at": datetime.now().isoformat(),
@@ -132,6 +167,33 @@ class ReportGenerator:
         if "monte_carlo" in self.report_data:
             mc = self.report_data["monte_carlo"].get("data", {})
             summary["success_probability"] = mc.get("success_probability")
+
+        # ── Advisory enrichment ──────────────────────────────────────────────
+        if "advisory" in self.report_data:
+            advisory = self.report_data["advisory"].get("data", {})
+            financial_health = advisory.get("financial_health") or {}
+            confidence_score = advisory.get("confidence_score") or {}
+            investment_allowed = bool(advisory.get("investment_allowed", True))
+
+            summary["financial_condition"] = {
+                "score": float(financial_health.get("score", 0.0) or 0.0),
+                "band": str(financial_health.get("band") or ""),
+                "drivers": list(financial_health.get("drivers") or []),
+                "investment_allowed": investment_allowed,
+                "block_reason": str(advisory.get("reason") or ""),
+            }
+            summary["risk_clarity"] = {
+                "confidence_band": str(confidence_score.get("band") or ""),
+                "display_confidence_pct": float(
+                    confidence_score.get("display_confidence_pct", 0.0) or 0.0
+                ),
+                "market_stability": float(
+                    confidence_score.get("market_stability", 0.0) or 0.0
+                ),
+                "stress_test": advisory.get("stress_test") or {},
+            }
+            summary["action_steps"] = list(advisory.get("priority_actions") or [])
+            summary["priority_plan"] = self.generate_priority_plan_section()
 
         return summary
 
@@ -384,6 +446,7 @@ def generate_complete_report(
     portfolio: List[Dict[str, Any]],
     monte_carlo_result: Dict[str, Any],
     fund_scores: List[Dict[str, Any]] = None,
+    advisory_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     generator = ReportGenerator()
 
@@ -392,6 +455,9 @@ def generate_complete_report(
     generator.add_allocation({"funds": allocation})
     generator.add_portfolio({"holdings": portfolio})
     generator.add_monte_carlo(monte_carlo_result)
+
+    if advisory_result is not None:
+        generator.add_advisory_result(advisory_result)
 
     macro_engine = MacroEngine()
     macro_context = macro_engine.get_current_context()

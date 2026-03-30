@@ -70,8 +70,16 @@ from ai_layer.scheduler.updater import start_scheduler
 
 # Start the background 15-minute data refresh once per app lifecycle
 if "_ai_scheduler_started" not in st.session_state:
-    start_scheduler()
-    st.session_state["_ai_scheduler_started"] = True
+    try:
+        start_scheduler()
+        st.session_state["_ai_scheduler_started"] = True
+    except Exception as _sched_err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Background scheduler failed to start (external data sources may be unreachable): %s",
+            _sched_err,
+        )
+        st.session_state["_ai_scheduler_started"] = False
 
 
 def _parse_iso_timestamp(value: str):

@@ -169,3 +169,5 @@ celerybeat-schedule.db
 report.pdf
 *.pdf
 *.html
+# Allow report templates (Jinja2 source files, not generated output)
+!backend/report/*.html

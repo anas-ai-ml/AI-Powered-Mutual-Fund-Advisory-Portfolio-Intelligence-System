@@ -3,7 +3,28 @@ backend/engines/recommendation_engine/dynamic_recommender.py
 ────────────────────────────────────────────────────────────
 The core orchestrator for the new dynamic recommendation pipeline.
 Loads data, filters, scores, diversifies, and explains.
+
+AI BOUNDARY ENFORCEMENT
+───────────────────────
+This module is DETERMINISTIC.  Pipeline steps — loading, quality filtering,
+scoring, risk-matching, and diversification — must remain free of LLM or
+AI inference calls.
+
+Permitted in this module:
+  - Rule-based pipeline orchestration
+  - Deterministic fund selection and diversification logic
+  - String-based explanation generation from fund attributes
+
+Not permitted in this module:
+  - LLM-generated fund rankings or scores
+  - Dynamic weighting driven by AI model outputs
+
+AI is reserved exclusively for generating explanations, summaries, and
+user-facing wording — never for filtering, scoring, or decision logic.
 """
+
+# AI_BOUNDARY_ENFORCED — do not remove this marker
+AI_BOUNDARY_ENFORCED: bool = True
 
 import os
 import pandas as pd

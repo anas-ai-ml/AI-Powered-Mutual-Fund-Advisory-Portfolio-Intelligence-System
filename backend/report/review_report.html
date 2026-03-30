@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portfolio Review — {{ data.client_name }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 22mm 16mm;
+    @bottom-center {
+      content: "Periodic Review | {{ data.review_date }} | Confidential";
+      font-size: 8px;
+      color: #6b7280;
+    }
+    @bottom-right {
+      content: counter(page);
+      font-size: 8px;
+      color: #6b7280;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10pt;
+    color: #1f2937;
+    line-height: 1.55;
+  }
+
+  .cover-page {
+    page-break-after: always;
+    min-height: 250mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 30mm 20mm;
+    background: linear-gradient(160deg, #064e3b 0%, #065f46 100%);
+    color: #f8fafc;
+  }
+  .cover-firm { font-size: 10pt; letter-spacing: 0.15em; text-transform: uppercase; color: #6ee7b7; margin-bottom: 10mm; }
+  .cover-title { font-size: 26pt; font-weight: 300; margin-bottom: 4mm; }
+  .cover-client { font-size: 18pt; font-weight: 600; color: #a7f3d0; margin-bottom: 8mm; }
+  .cover-meta { font-size: 9pt; color: #6ee7b7; margin-top: 20mm; border-top: 1px solid #047857; padding-top: 4mm; }
+
+  .section { page-break-inside: avoid; margin-bottom: 10mm; }
+  .section-eyebrow { font-size: 7pt; text-transform: uppercase; letter-spacing: 0.12em; color: #6b7280; margin-bottom: 1mm; }
+  .section-title { font-size: 15pt; font-weight: 300; color: #064e3b; border-bottom: 2px solid #064e3b; padding-bottom: 2mm; margin-bottom: 4mm; }
+  .section-body { font-size: 10pt; color: #374151; }
+
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; margin-top: 3mm; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4mm; margin-top: 3mm; }
+  .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 2mm; padding: 3mm; }
+  .card-label { font-size: 7pt; text-transform: uppercase; color: #6b7280; letter-spacing: 0.08em; }
+  .card-value { font-size: 13pt; font-weight: 600; color: #064e3b; margin-top: 1mm; }
+  .card-sub { font-size: 8pt; color: #6b7280; margin-top: 0.5mm; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 3mm; font-size: 9pt; }
+  th { background: #064e3b; color: #f8fafc; padding: 2.5mm 3mm; text-align: left; font-weight: 500; }
+  td { padding: 2mm 3mm; border-bottom: 1px solid #e2e8f0; }
+  tr:nth-child(even) td { background: #f0fdf4; }
+  .number { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .alert-box {
+    background: #fefce8;
+    border: 1px solid #fde047;
+    border-left: 3px solid #ca8a04;
+    padding: 3mm 4mm;
+    font-size: 9pt;
+    color: #713f12;
+    margin-top: 3mm;
+    border-radius: 1mm;
+  }
+
+  .notes-box {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-left: 3px solid #16a34a;
+    padding: 3mm 4mm;
+    font-size: 9.5pt;
+    color: #14532d;
+    margin-top: 3mm;
+  }
+
+  .disclaimer-box {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-left: 3px solid #9ca3af;
+    padding: 3mm 4mm;
+    font-size: 7.5pt;
+    color: #6b7280;
+    margin-top: 4mm;
+  }
+
+  .contact-block {
+    margin-top: 8mm;
+    padding: 4mm;
+    background: #064e3b;
+    color: #f8fafc;
+    border-radius: 2mm;
+    font-size: 9pt;
+  }
+  .contact-block strong { color: #6ee7b7; }
+
+  .timeline-item { padding: 2mm 0; border-bottom: 1px solid #e2e8f0; font-size: 9pt; }
+  .timeline-action { font-weight: 600; color: #064e3b; }
+  .timeline-ts { color: #6b7280; font-size: 8pt; }
+
+  .page-break { page-break-after: always; }
+</style>
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="cover-page">
+  <div class="cover-firm">
+    {% if data.firm_name %}{{ data.firm_name }}{% else %}{{ data.advisor_name }}{% endif %}
+    &nbsp;|&nbsp; Portfolio Review
+  </div>
+  <div class="cover-title">Periodic Portfolio Review</div>
+  <div class="cover-client">{{ data.client_name }}</div>
+  <div class="cover-meta">
+    Review Date: {{ data.review_date }}<br>
+    Prepared by: {{ data.advisor_name }}
+    {% if data.advisor_email %} &nbsp;|&nbsp; {{ data.advisor_email }}{% endif %}
+    {% if data.advisor_phone %} &nbsp;|&nbsp; {{ data.advisor_phone }}{% endif %}
+  </div>
+</div>
+
+<!-- CURRENT PORTFOLIO SNAPSHOT -->
+{% if data.current_snapshot %}
+<div class="section">
+  <div class="section-eyebrow">Current Holdings</div>
+  <div class="section-title">Portfolio Snapshot</div>
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-label">Equity</div>
+      <div class="card-value">₹{{ "{:,.0f}".format(data.current_snapshot.equity) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Debt / FD / Bonds</div>
+      <div class="card-value">₹{{ "{:,.0f}".format(data.current_snapshot.fd_bonds) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Gold / Alternatives</div>
+      <div class="card-value">₹{{ "{:,.0f}".format(data.current_snapshot.gold) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Cash / Liquid</div>
+      <div class="card-value">₹{{ "{:,.0f}".format(data.current_snapshot.cash) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Portfolio Value</div>
+      <div class="card-value">₹{{ "{:,.0f}".format(data.current_snapshot.total) }}</div>
+    </div>
+  </div>
+  {% if data.current_snapshot.notes %}
+  <div class="notes-box" style="margin-top:4mm;">{{ data.current_snapshot.notes }}</div>
+  {% endif %}
+  {% if data.current_snapshot.as_of %}
+  <div class="card-sub" style="margin-top:2mm;">Snapshot as of: {{ data.current_snapshot.as_of[:10] }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- PREVIOUS ADVICE REFERENCE -->
+{% if data.last_proposal and data.last_proposal.version_number %}
+<div class="section">
+  <div class="section-eyebrow">Advisory Reference</div>
+  <div class="section-title">Last Issued Proposal</div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-label">Proposal Version</div>
+      <div class="card-value">v{{ data.last_proposal.version_number }}</div>
+    </div>
+    {% if data.last_proposal.issued_date %}
+    <div class="card">
+      <div class="card-label">Issued On</div>
+      <div class="card-value">{{ data.last_proposal.issued_date[:10] }}</div>
+    </div>
+    {% endif %}
+  </div>
+  {% if data.last_proposal.category_rationale %}
+  <div class="section-body" style="margin-top:4mm;">
+    <strong>Original Advisory Rationale:</strong><br>
+    {{ data.last_proposal.category_rationale }}
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="section">
+  <div class="section-title">Last Issued Proposal</div>
+  <div class="alert-box">No previously issued proposal found for this client. This is the first review.</div>
+</div>
+{% endif %}
+
+<!-- ADVISOR REVIEW NOTES -->
+{% if data.advisor_notes %}
+<div class="section">
+  <div class="section-eyebrow">Advisor Commentary</div>
+  <div class="section-title">Review Notes</div>
+  <div class="notes-box">{{ data.advisor_notes }}</div>
+</div>
+{% endif %}
+
+<!-- ACTIVITY TIMELINE -->
+{% if data.activity_log %}
+<div class="section">
+  <div class="section-eyebrow">Interaction History</div>
+  <div class="section-title">Recent Activity</div>
+  {% for entry in data.activity_log %}
+  <div class="timeline-item">
+    <span class="timeline-action">{{ entry.action | replace('_', ' ') | title }}</span>
+    &nbsp;
+    <span class="timeline-ts">{{ (entry.timestamp or '')[:16] | replace('T', ' ') }}</span>
+    {% if entry.notes %}<br><span style="color:#374151;">{{ entry.notes }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- CONTACT -->
+<div class="contact-block">
+  <strong>{{ data.advisor_name }}</strong>
+  {% if data.firm_name %} &nbsp;—&nbsp; {{ data.firm_name }}{% endif %}<br>
+  {% if data.advisor_email %}Email: {{ data.advisor_email }}<br>{% endif %}
+  {% if data.advisor_phone %}Phone: {{ data.advisor_phone }}<br>{% endif %}
+  Periodic Portfolio Review | For Advisor Use
+</div>
+
+<!-- DISCLAIMER -->
+<div class="disclaimer-box" style="margin-top:6mm;">
+  {{ disclaimer }}
+</div>
+
+</body>
+</html>

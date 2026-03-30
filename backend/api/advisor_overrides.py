@@ -1,3 +1,17 @@
+"""
+backend/api/advisor_overrides.py
+─────────────────────────────────
+Advisor override helpers.
+
+- `apply_overrides(allocation, user_data)` — rule-based guardrail logic used
+  by the allocation pipeline.
+- `AdvisorOverrideAPI` — thin wrapper around the SQLAlchemy session for use
+  inside FastAPI request handlers (pass `db` explicitly).
+
+The legacy Flask Blueprint is kept for backward compatibility but now delegates
+all storage to the DB via `AdvisorOverrideAPI`.
+"""
+
 try:
     from flask import Blueprint, request, jsonify
 
@@ -5,122 +19,90 @@ try:
 except ImportError:
     FLASK_AVAILABLE = False
 
-import uuid
 from datetime import datetime
-
-override_log = []
+from typing import Any, Dict, Optional
 
 if FLASK_AVAILABLE:
     advisor_bp = Blueprint("advisor", __name__)
 
+    # Flask routes are thin stubs; real persistence is via FastAPI + SQLAlchemy.
     @advisor_bp.route("/override", methods=["POST"])
     def create_override():
-        data = request.json
-
-        entry = {
-            "id": str(uuid.uuid4()),
-            "client_id": data.get("client_id"),
-            "original": data.get("original"),
-            "replacement": data.get("replacement"),
-            "reason": data.get("reason"),
-            "advisor_id": data.get("advisor_id"),
-            "created_at": datetime.now().isoformat(),
-            "status": "pending",
-        }
-
-        override_log.append(entry)
-
-        return jsonify(
-            {
-                "status": "ok",
-                "override_id": entry["id"],
-                "message": "Override request created",
-            }
-        )
-
-    @advisor_bp.route("/override/<override_id>", methods=["GET"])
-    def get_override(override_id):
-        override = next((o for o in override_log if o["id"] == override_id), None)
-        if override:
-            return jsonify(override)
-        return jsonify({"error": "Override not found"}), 404
-
-    @advisor_bp.route("/override/<override_id>/approve", methods=["POST"])
-    def approve_override(override_id):
-        override = next((o for o in override_log if o["id"] == override_id), None)
-        if override:
-            override["status"] = "approved"
-            override["approved_at"] = datetime.now().isoformat()
-            return jsonify({"status": "approved", "override": override})
-        return jsonify({"error": "Override not found"}), 404
-
-    @advisor_bp.route("/override/<override_id>/reject", methods=["POST"])
-    def reject_override(override_id):
-        data = request.json
-        override = next((o for o in override_log if o["id"] == override_id), None)
-        if override:
-            override["status"] = "rejected"
-            override["rejected_at"] = datetime.now().isoformat()
-            override["rejection_reason"] = data.get("reason", "")
-            return jsonify({"status": "rejected", "override": override})
-        return jsonify({"error": "Override not found"}), 404
+        return jsonify({"error": "Use the FastAPI /overrides endpoint"}), 501
 
     @advisor_bp.route("/overrides", methods=["GET"])
     def list_overrides():
-        client_id = request.args.get("client_id")
-        status = request.args.get("status")
-        results = override_log
-        if client_id:
-            results = [o for o in results if o.get("client_id") == client_id]
-        if status:
-            results = [o for o in results if o.get("status") == status]
-        return jsonify({"overrides": results, "count": len(results)})
+        return jsonify({"error": "Use the FastAPI /overrides endpoint"}), 501
 else:
     advisor_bp = None
 
 
 class AdvisorOverrideAPI:
+    """DB-backed override operations. Pass a SQLAlchemy `Session` on each call."""
+
     @staticmethod
-    def create_override(client_id, original, replacement, reason, advisor_id):
-        entry = {
-            "id": str(uuid.uuid4()),
-            "client_id": client_id,
-            "original": original,
-            "replacement": replacement,
-            "reason": reason,
-            "advisor_id": advisor_id,
-            "created_at": datetime.now().isoformat(),
-            "status": "pending",
-        }
-        override_log.append(entry)
+    def create(
+        db,
+        client_id: int,
+        advisor_id: int,
+        original: Optional[Dict[str, Any]],
+        replacement: Optional[Dict[str, Any]],
+        reason: str,
+    ):
+        from backend.database.models import AdvisorOverride
+
+        entry = AdvisorOverride(
+            client_id=client_id,
+            advisor_id=advisor_id,
+            original=original,
+            replacement=replacement,
+            reason=reason,
+            status="pending",
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
         return entry
 
     @staticmethod
-    def approve_override(override_id):
-        override = next((o for o in override_log if o["id"] == override_id), None)
-        if override:
-            override["status"] = "approved"
-            override["approved_at"] = datetime.now().isoformat()
-            return override
-        return None
+    def get(db, override_id: int):
+        from backend.database.models import AdvisorOverride
+
+        return db.query(AdvisorOverride).filter(AdvisorOverride.id == override_id).first()
 
     @staticmethod
-    def reject_override(override_id, reason=""):
-        override = next((o for o in override_log if o["id"] == override_id), None)
-        if override:
-            override["status"] = "rejected"
-            override["rejected_at"] = datetime.now().isoformat()
-            override["rejection_reason"] = reason
-            return override
-        return None
+    def approve(db, override_id: int):
+        from backend.database.models import AdvisorOverride
+
+        entry = db.query(AdvisorOverride).filter(AdvisorOverride.id == override_id).first()
+        if entry:
+            entry.status = "approved"
+            entry.approved_at = datetime.utcnow()
+            db.commit()
+            db.refresh(entry)
+        return entry
 
     @staticmethod
-    def get_override(override_id):
-        return next((o for o in override_log if o["id"] == override_id), None)
+    def reject(db, override_id: int, rejection_reason: str = ""):
+        from backend.database.models import AdvisorOverride
+
+        entry = db.query(AdvisorOverride).filter(AdvisorOverride.id == override_id).first()
+        if entry:
+            entry.status = "rejected"
+            entry.rejected_at = datetime.utcnow()
+            entry.rejection_reason = rejection_reason
+            db.commit()
+            db.refresh(entry)
+        return entry
 
     @staticmethod
-    def get_client_overrides(client_id):
-        return [o for o in override_log if o.get("client_id") == client_id]
+    def list_for_client(db, client_id: int, status: Optional[str] = None):
+        from backend.database.models import AdvisorOverride
+
+        q = db.query(AdvisorOverride).filter(AdvisorOverride.client_id == client_id)
+        if status:
+            q = q.filter(AdvisorOverride.status == status)
+        return q.order_by(AdvisorOverride.created_at.desc()).all()
 
 
 def apply_overrides(allocation: dict, user_data: dict) -> dict:
@@ -131,18 +113,6 @@ def apply_overrides(allocation: dict, user_data: dict) -> dict:
     - Clients over 55: minimum 40% debt allocation
     - Risk score below 4 (conservative): cap equity at 30%
     - Any key in allocation is preserved; only adjusted if rule triggers
-
-    Parameters
-    ----------
-    allocation : dict
-        Current allocation, e.g. {"equity": 60, "debt": 30, "gold": 10}
-    user_data : dict
-        Client profile dict from session state.
-
-    Returns
-    -------
-    dict
-        Adjusted allocation with override_applied flag and override_reason string.
     """
     if not allocation:
         return allocation

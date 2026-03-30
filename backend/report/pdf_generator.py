@@ -85,6 +85,62 @@ def generate_financial_report(
     return output_path
 
 
+def generate_vinsan_proposal_pdf(
+    deck_data: dict,
+    output_path: str = "vinsan_proposal.pdf",
+):
+    """
+    Generates the Vinsan-branded advisor presentation PDF.
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    env = Environment(loader=FileSystemLoader(current_dir))
+    template = env.get_template("vinsan_proposal.html")
+
+    disclaimer_path = os.path.join(current_dir, "..", "..", "DISCLAIMER.txt")
+    try:
+        with open(disclaimer_path, "r", encoding="utf-8") as f:
+            disclaimer_text = f.read()
+    except FileNotFoundError:
+        disclaimer_text = "Market performance is not guaranteed. Please consult a qualified advisor."
+
+    html_out = template.render(
+        today=datetime.now().strftime("%d %b %Y"),
+        deck=deck_data,
+        disclaimer=disclaimer_text,
+    )
+
+    HTML(string=html_out).write_pdf(output_path)
+    return output_path
+
+
+def generate_review_report_pdf(
+    review_data: dict,
+    output_path: str = "review_report.pdf",
+):
+    """
+    Generates a periodic portfolio review PDF.
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    env = Environment(loader=FileSystemLoader(current_dir))
+    template = env.get_template("review_report.html")
+
+    disclaimer_path = os.path.join(current_dir, "..", "..", "DISCLAIMER.txt")
+    try:
+        with open(disclaimer_path, "r", encoding="utf-8") as f:
+            disclaimer_text = f.read()
+    except FileNotFoundError:
+        disclaimer_text = "Market performance is not guaranteed. Please consult a qualified advisor."
+
+    html_out = template.render(
+        today=datetime.now().strftime("%d %b %Y"),
+        data=review_data,
+        disclaimer=disclaimer_text,
+    )
+
+    HTML(string=html_out).write_pdf(output_path)
+    return output_path
+
+
 def generate_proposal_deck_pdf(
     deck_data: dict,
     output_path: str = "proposal_deck.pdf",

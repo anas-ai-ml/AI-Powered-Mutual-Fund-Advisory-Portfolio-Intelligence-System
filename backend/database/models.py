@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import declarative_base, relationship
 
 
@@ -15,6 +15,9 @@ class Advisor(Base):
     hashed_password = Column(String(255), nullable=False)
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="advisor")
+    firm_name = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    logo_path = Column(String(500), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     clients = relationship("Client", back_populates="advisor", cascade="all, delete-orphan")
@@ -31,6 +34,9 @@ class Client(Base):
     pan_placeholder = Column(String(50), nullable=True)
     city = Column(String(255), nullable=True)
     source_channel = Column(String(255), nullable=True)
+    occupation = Column(String(255), nullable=True)
+    income_bracket = Column(String(100), nullable=True)
+    investable_surplus = Column(Float, nullable=True)
     profile_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -45,7 +51,10 @@ class Client(Base):
     proposal_drafts = relationship(
         "ProposalDraft", back_populates="client", cascade="all, delete-orphan"
     )
+    meeting_notes = relationship("MeetingNote", back_populates="client", cascade="all, delete-orphan")
+    issued_reports = relationship("IssuedReport", back_populates="client", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="client", cascade="all, delete-orphan")
+    advisor_overrides = relationship("AdvisorOverride", back_populates="client", cascade="all, delete-orphan")
 
 
 class RiskQuestionnaire(Base):
@@ -99,9 +108,14 @@ class ProposalDraft(Base):
     advisor_final = Column(JSON, nullable=True)
     override_reason = Column(String(1000), nullable=True)
     status = Column(String(50), nullable=False, default="draft")
+    version_number = Column(Integer, nullable=False, default=1)
+    category_rationale = Column(Text, nullable=True)
+    sip_assumptions = Column(JSON, nullable=True)
+    benchmark_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     client = relationship("Client", back_populates="proposal_drafts")
+    issued_reports = relationship("IssuedReport", back_populates="proposal", cascade="all, delete-orphan")
 
 
 class AuditLog(Base):
@@ -117,4 +131,57 @@ class AuditLog(Base):
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     client = relationship("Client", back_populates="audit_logs")
+    advisor = relationship("Advisor")
+
+
+class MeetingNote(Base):
+    __tablename__ = "meeting_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    advisor_id = Column(Integer, ForeignKey("advisors.id"), nullable=False, index=True)
+    raw_transcript = Column(Text, nullable=False)
+    ai_summary = Column(Text, nullable=True)
+    structured_extractions = Column(JSON, nullable=True)
+    confidence_flags = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    applied_to_profile = Column(Boolean, nullable=False, default=False)
+
+    client = relationship("Client", back_populates="meeting_notes")
+    advisor = relationship("Advisor")
+
+
+class AdvisorOverride(Base):
+    __tablename__ = "advisor_overrides"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    advisor_id = Column(Integer, ForeignKey("advisors.id"), nullable=False, index=True)
+    original = Column(JSON, nullable=True)
+    replacement = Column(JSON, nullable=True)
+    reason = Column(String(1000), nullable=True)
+    status = Column(String(50), nullable=False, default="pending")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    approved_at = Column(DateTime, nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(String(500), nullable=True)
+
+    client = relationship("Client", back_populates="advisor_overrides")
+    advisor = relationship("Advisor")
+
+
+class IssuedReport(Base):
+    __tablename__ = "issued_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    proposal_id = Column(Integer, ForeignKey("proposal_drafts.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    issued_by = Column(Integer, ForeignKey("advisors.id"), nullable=False, index=True)
+    pdf_path = Column(String(500), nullable=True)
+    version_number = Column(Integer, nullable=False, default=1)
+    issue_date = Column(DateTime, nullable=False, default=datetime.utcnow)
+    report_type = Column(String(50), nullable=False, default="proposal_deck")
+
+    client = relationship("Client", back_populates="issued_reports")
+    proposal = relationship("ProposalDraft", back_populates="issued_reports")
     advisor = relationship("Advisor")
