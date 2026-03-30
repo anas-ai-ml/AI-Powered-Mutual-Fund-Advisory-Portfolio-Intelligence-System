@@ -32,6 +32,13 @@ def run():
         "ALTER TABLE advisors ADD COLUMN IF NOT EXISTS firm_name VARCHAR(255)",
         "ALTER TABLE advisors ADD COLUMN IF NOT EXISTS phone VARCHAR(50)",
         "ALTER TABLE advisors ADD COLUMN IF NOT EXISTS logo_path VARCHAR(500)",
+
+        # ── proposal_drafts: versioning and content columns ───────────────
+        "ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1",
+        "ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS category_rationale TEXT",
+        "ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS sip_assumptions JSON",
+        "ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS benchmark_data JSON",
+        "ALTER TABLE proposal_drafts ADD COLUMN IF NOT EXISTS advisor_final JSON",
     ]
 
     # Create any entirely new tables (advisor_overrides, etc.) that don't exist yet

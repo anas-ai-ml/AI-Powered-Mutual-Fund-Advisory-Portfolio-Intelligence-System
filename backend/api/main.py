@@ -369,6 +369,26 @@ def list_clients(
     return results
 
 
+@app.get("/clients/proposal-counts")
+def get_proposal_counts(
+    db: Session = Depends(get_db),
+    current_advisor: Advisor = Depends(get_current_advisor),
+):
+    """Returns {client_id: proposal_count} for all accessible clients."""
+    client_ids_query = db.query(Client.id)
+    if not _is_admin(current_advisor):
+        client_ids_query = client_ids_query.filter(Client.advisor_id == current_advisor.id)
+    client_ids = [row[0] for row in client_ids_query.all()]
+
+    rows = (
+        db.query(ProposalDraft.client_id, func.count(ProposalDraft.id).label("count"))
+        .filter(ProposalDraft.client_id.in_(client_ids))
+        .group_by(ProposalDraft.client_id)
+        .all()
+    )
+    return {str(row.client_id): row.count for row in rows}
+
+
 @app.get("/clients/{client_id}")
 def get_client(
     client_id: int,
@@ -1143,28 +1163,6 @@ def reject_override(
     if not entry:
         raise HTTPException(status_code=404, detail="Override not found")
     return _serialize_override(entry)
-
-
-# ── Proposal Counts (global summary) ─────────────────────────────────────────
-
-@app.get("/clients/proposal-counts")
-def get_proposal_counts(
-    db: Session = Depends(get_db),
-    current_advisor: Advisor = Depends(get_current_advisor),
-):
-    """Returns {client_id: proposal_count} for all accessible clients."""
-    client_ids_query = db.query(Client.id)
-    if not _is_admin(current_advisor):
-        client_ids_query = client_ids_query.filter(Client.advisor_id == current_advisor.id)
-    client_ids = [row[0] for row in client_ids_query.all()]
-
-    rows = (
-        db.query(ProposalDraft.client_id, func.count(ProposalDraft.id).label("count"))
-        .filter(ProposalDraft.client_id.in_(client_ids))
-        .group_by(ProposalDraft.client_id)
-        .all()
-    )
-    return {str(row.client_id): row.count for row in rows}
 
 
 # ── Review Report ─────────────────────────────────────────────────────────────
